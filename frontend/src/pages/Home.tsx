@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import { Logo } from '../components/Logo'
 import type { SurahInfo } from '../types'
+
+const MicIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5.6-3a.9.9 0 0 0-1.8.13 3.82 3.82 0 0 1-7.6 0A.9.9 0 0 0 6.4 11a5.62 5.62 0 0 0 4.7 5.46V19H9a.9.9 0 1 0 0 1.8h6A.9.9 0 1 0 15 19h-2.1v-2.54A5.62 5.62 0 0 0 17.6 11z" />
+  </svg>
+)
 
 export function Home({
   onStart,
@@ -10,7 +17,8 @@ export function Home({
   onStartAuto: (surahs: SurahInfo[]) => void
 }) {
   const [surahs, setSurahs] = useState<SurahInfo[]>([])
-  const [surahId, setSurahId] = useState(1)
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState<number | null>(null)
   const [startAyah, setStartAyah] = useState(1)
   const [error, setError] = useState('')
 
@@ -18,65 +26,117 @@ export function Home({
     api.surahs().then(setSurahs).catch((e) => setError(String(e)))
   }, [])
 
-  const selected = surahs.find((s) => s.id === surahId)
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return surahs
+    return surahs.filter(
+      (s) =>
+        s.name_english.toLowerCase().includes(q) ||
+        s.name_arabic.includes(q) ||
+        String(s.id) === q,
+    )
+  }, [surahs, query])
+
+  const sel = surahs.find((s) => s.id === selected)
 
   return (
     <div className="page home">
-      <h1>
-        ReciteIQ <span className="tagline">— your digital Sami</span>
-      </h1>
-      <p className="intro">
-        Select where you want to recite from. ReciteIQ listens and flags missed words, missed
-        ayahs, and Mutashabeh jumps in real time.
-      </p>
+      <nav className="nav">
+        <Logo />
+        <div className="wordmark">
+          Recite<span>IQ</span>
+        </div>
+        <div className="nav-sub">سَمِيعُكَ الذَّكِيّ</div>
+      </nav>
+
+      <header className="hero">
+        <h1>
+          Recite. It listens, tracks
+          <br />
+          and <span className="accent">corrects — live</span>.
+        </h1>
+        <p>
+          An always-available Sami for your Hifz revision: word-by-word tracking against the
+          full Quran, with instant feedback the moment something slips.
+        </p>
+      </header>
+
       {error && <div className="error">{error}</div>}
-      <div className="auto-start">
-        <button className="primary big" disabled={!surahs.length} onClick={() => onStartAuto(surahs)}>
-          🎙 Just Recite
+
+      <section className="cta-card panel">
+        <button
+          className="mic-button"
+          disabled={!surahs.length}
+          onClick={() => onStartAuto(surahs)}
+          aria-label="Just Recite — start with auto-detection"
+        >
+          <MicIcon />
         </button>
-        <span className="auto-hint">
-          Start reciting anywhere — ReciteIQ detects the Surah and Ayah automatically.
-        </span>
+        <div className="cta-copy">
+          <h2>Just Recite</h2>
+          <p>
+            Start anywhere in the Quran — ReciteIQ <span className="gold">detects the Surah and
+            Ayah from your voice</span> within a few words and starts tracking automatically.
+          </p>
+        </div>
+      </section>
+
+      <div className="feature-chips">
+        <span className="chip"><b>Missed words</b> flagged in place</span>
+        <span className="chip"><b>Skipped ayahs</b> caught instantly</span>
+        <span className="chip"><b>Mutashabeh jumps</b> traced to the exact twin verse</span>
       </div>
-      <div className="divider">or choose manually</div>
-      <div className="picker">
-        <label>
-          Surah
-          <select
-            value={surahId}
-            onChange={(e) => {
-              setSurahId(Number(e.target.value))
+
+      <div className="divider">or choose where to start</div>
+
+      <div className="picker-head">
+        <input
+          type="search"
+          placeholder="Search surah by name or number…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {sel && (
+          <div className="start-controls">
+            <label htmlFor="start-ayah">from Ayah</label>
+            <input
+              id="start-ayah"
+              type="number"
+              min={1}
+              max={sel.ayah_count}
+              value={startAyah}
+              onChange={(e) => setStartAyah(Number(e.target.value))}
+            />
+            <button className="primary" onClick={() => onStart(surahs, sel.id, startAyah)}>
+              Start
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="surah-grid">
+        {filtered.map((s) => (
+          <button
+            key={s.id}
+            className={`surah-card ${selected === s.id ? 'selected' : ''}`}
+            onClick={() => {
+              setSelected(s.id)
               setStartAyah(1)
             }}
           >
-            {surahs.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.id}. {s.name_english} — {s.name_arabic}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Starting Ayah
-          <input
-            type="number"
-            min={1}
-            max={selected?.ayah_count ?? 1}
-            value={startAyah}
-            onChange={(e) => setStartAyah(Number(e.target.value))}
-          />
-        </label>
-        <button
-          className="primary"
-          disabled={!surahs.length}
-          onClick={() => onStart(surahs, surahId, startAyah)}
-        >
-          Start Recitation
-        </button>
+            <span className="num">{s.id}</span>
+            <span className="names">
+              <span className="en">{s.name_english}</span>
+              <span className="meta">{s.ayah_count} ayahs</span>
+            </span>
+            <span className="ar">{s.name_arabic}</span>
+          </button>
+        ))}
       </div>
+
       <p className="privacy">
-        🎙 Your voice is processed in memory only and never stored — only the text results of
-        your session are saved.
+        🔒 Your voice is processed in memory only and never stored — only the text results of your
+        session are saved.
       </p>
     </div>
   )

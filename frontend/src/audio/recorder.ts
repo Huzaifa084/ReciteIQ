@@ -27,7 +27,7 @@ export class Recorder {
   private buf: number[] = []
   private chunkSamples = (TARGET_RATE * CHUNK_MS) / 1000
 
-  async start(onChunk: (pcm: ArrayBuffer) => void): Promise<void> {
+  async start(onChunk: (pcm: ArrayBuffer) => void, onLevel?: (rms: number) => void): Promise<void> {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     })
@@ -54,10 +54,13 @@ export class Recorder {
       while (this.buf.length >= this.chunkSamples) {
         const chunk = this.buf.splice(0, this.chunkSamples)
         const pcm = new Int16Array(chunk.length)
+        let sumSq = 0
         for (let i = 0; i < chunk.length; i++) {
           pcm[i] = Math.max(-32768, Math.min(32767, Math.round(chunk[i] * 32767)))
+          sumSq += chunk[i] * chunk[i]
         }
         onChunk(pcm.buffer)
+        onLevel?.(Math.sqrt(sumSq / chunk.length)) // RMS 0..~0.5, drives the voice ring
       }
     }
     src.connect(this.node)

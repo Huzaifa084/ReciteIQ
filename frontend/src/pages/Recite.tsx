@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { Recorder } from '../audio/recorder'
 import { JumpBanner } from '../components/JumpBanner'
@@ -6,6 +6,12 @@ import { MushafView } from '../components/MushafView'
 import { applyEvents, initialState, type ReciteState } from '../state/reducer'
 import type { DisplayAyah, SurahInfo } from '../types'
 import { SessionSocket } from '../ws/client'
+
+const WaveIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 13.5a1 1 0 0 1-1-1v-1a1 1 0 1 1 2 0v1a1 1 0 0 1-1 1zm4.5 3a1 1 0 0 1-1-1v-7a1 1 0 1 1 2 0v7a1 1 0 0 1-1 1zm4.5 3a1 1 0 0 1-1-1v-13a1 1 0 1 1 2 0v13a1 1 0 0 1-1 1zm4.5-3a1 1 0 0 1-1-1v-7a1 1 0 1 1 2 0v7a1 1 0 0 1-1 1zm4.5-3a1 1 0 0 1-1-1v-1a1 1 0 1 1 2 0v1a1 1 0 0 1-1 1z" />
+  </svg>
+)
 
 export function Recite({
   surahs,
@@ -33,6 +39,7 @@ export function Recite({
   const recRef = useRef<Recorder | null>(null)
   const sessionRef = useRef<string>('')
   const mutedRef = useRef(false)
+  const ringRef = useRef<HTMLDivElement | null>(null)
 
   const teardown = useCallback(() => {
     recRef.current?.stop()
@@ -78,9 +85,16 @@ export function Recite({
 
         const rec = new Recorder()
         recRef.current = rec
-        await rec.start((pcm) => {
-          if (!mutedRef.current) sockRef.current?.sendAudio(pcm)
-        })
+        await rec.start(
+          (pcm) => {
+            if (!mutedRef.current) sockRef.current?.sendAudio(pcm)
+          },
+          (rms) => {
+            // drive the voice ring without re-rendering React on every chunk
+            const lvl = mutedRef.current ? 0 : Math.min(1, rms * 4)
+            ringRef.current?.style.setProperty('--level', lvl.toFixed(2))
+          },
+        )
         if (!cancelled) setStatus(auto ? 'detecting' : 'live')
       } catch (e) {
         if (!cancelled) {
@@ -95,54 +109,73 @@ export function Recite({
     }
   }, [surahId, startAyah, auto, teardown, onFinished])
 
+  const totalWords = useMemo(() => ayahs.reduce((n, a) => n + a.words.length, 0), [ayahs])
+  const okWords = useMemo(() => {
+    let n = 0
+    for (const st of state.words.values()) if (st === 'ok') n++
+    return n
+  }, [state.words])
+
   const toggleMute = () => {
     mutedRef.current = !mutedRef.current
     setStatus(mutedRef.current ? 'muted' : 'live')
   }
 
-  const endSession = () => {
-    sockRef.current?.end() // server replies 'ended' -> onEnded -> summary
-  }
-
   const surah = surahs.find((s) => s.id === detectedSurah)
+  const pillClass =
+    status === 'live' ? 'live' : status === 'muted' ? 'muted' : status === 'detecting' ? 'detecting' : ''
+  const pillText =
+    status === 'live'
+      ? 'listening'
+      : status === 'detecting'
+        ? 'detecting location…'
+        : status === 'muted'
+          ? 'paused'
+          : status
 
   return (
     <div className="page recite">
       <header className="recite-header">
-        <h2>
-          {surah ? (
-            <>
-              {surah.name_english} <span dir="rtl">{surah.name_arabic}</span>
-            </>
-          ) : (
-            'ReciteIQ'
-          )}
-        </h2>
+        <div className="recite-title">
+          <div className="voice-ring" ref={ringRef}>
+            <WaveIcon />
+          </div>
+          <h2>{surah ? surah.name_english : 'ReciteIQ'}</h2>
+          {surah && <span className="ar">{surah.name_arabic}</span>}
+        </div>
         <div className="controls">
-          <span className={`status status-${status}`}>
-            {status === 'live'
-              ? '● listening'
-              : status === 'detecting'
-                ? '◌ detecting location…'
-                : status === 'muted'
-                  ? '⏸ paused'
-                  : status}
+          <span className={`status-pill ${pillClass}`}>
+            <span className="dot" />
+            {pillText}
           </span>
           <button onClick={toggleMute} disabled={status === 'starting' || status === 'error'}>
             {status === 'muted' ? 'Resume' : 'Pause'}
           </button>
-          <button className="danger" onClick={endSession} disabled={status === 'starting'}>
+          <button
+            className="danger"
+            onClick={() => sockRef.current?.end()}
+            disabled={status === 'starting'}
+          >
             End Session
           </button>
         </div>
       </header>
 
+      {totalWords > 0 && (
+        <div className="progress-track" title={`${okWords} of ${totalWords} words`}>
+          <div className="progress-fill" style={{ width: `${(okWords / totalWords) * 100}%` }} />
+        </div>
+      )}
+
       {error && <div className="error">{error}</div>}
 
       {status === 'detecting' && (
         <div className="detecting-hint">
-          🎙 Just start reciting — ReciteIQ will find the Surah and Ayah from your voice. A few
-          words are usually enough; similar passages may need one more ayah.
+          <span style={{ fontSize: 26 }}>🎙</span>
+          <span>
+            Just start reciting — ReciteIQ finds the Surah and Ayah from your voice. A few words
+            are usually enough; similar passages may need one more ayah.
+          </span>
         </div>
       )}
 
@@ -159,14 +192,19 @@ export function Recite({
         />
       )}
 
-      {ayahs.length > 0 && <MushafView ayahs={ayahs} state={state} />}
+      {ayahs.length > 0 && (
+        <div className="mushaf-frame">
+          <div className="ornament" />
+          <MushafView ayahs={ayahs} state={state} />
+        </div>
+      )}
 
       {ayahs.length > 0 && (
         <footer className="legend">
-          <span className="word-ok">recited</span>
-          <span className="word-missed">missed</span>
-          <span className="word-missed-provisional">checking…</span>
-          <span className="word-current">current</span>
+          <span><i className="i-ok" /> recited</span>
+          <span><i className="i-missed" /> missed</span>
+          <span><i className="i-checking" /> checking…</span>
+          <span><i className="i-current" /> current position</span>
         </footer>
       )}
     </div>
