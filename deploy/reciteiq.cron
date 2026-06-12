@@ -1,0 +1,4 @@
+# ReciteIQ ops: nightly DB backup (14-day keep) + anonymous-event retention.
+# Install (requires root approval — persistence): cp deploy/reciteiq.cron /etc/cron.d/reciteiq
+15 3 * * * root mkdir -p /opt/backups/reciteiq && docker exec reciteiq-db-1 pg_dump -U reciteiq reciteiq | gzip > /opt/backups/reciteiq/reciteiq-$(date +\%F).sql.gz && find /opt/backups/reciteiq -name '*.sql.gz' -mtime +14 -delete
+45 3 * * * root docker exec reciteiq-db-1 psql -U reciteiq -d reciteiq -c "DELETE FROM session_events WHERE ts < now() - interval '30 days' AND session_id IN (SELECT id FROM sessions WHERE user_id IS NULL)"

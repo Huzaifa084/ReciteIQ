@@ -25,7 +25,42 @@ services:
       timeout: 5s
       retries: 5
 
-  # backend + web services are added in later phases
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    environment:
+      RECITEIQ_DATABASE_URL: postgresql+psycopg://reciteiq:reciteiq@db:5432/reciteiq
+      RECITEIQ_ALLOWED_ORIGINS: '["https://reciteiq.wiserhelpdesk.com"]'
+    volumes:
+      - ../backend/models:/app/models:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  web:
+    build: ../frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:19843:443"    # edge SNI map routes reciteiq.wiserhelpdesk.com here
+    volumes:
+      - ./nginx/reciteiq.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/nginx-edge/ssl/wiserhelpdesk.com:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
 volumes:
   reciteiq_pgdata:
