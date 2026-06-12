@@ -1,0 +1,253 @@
+:root {
+  --bg: #0e1a14;
+  --panel: #16241c;
+  --text: #e8efe9;
+  --muted: #8fa899;
+  --green: #34c275;
+  --green-soft: rgba(52, 194, 117, 0.18);
+  --red: #e5534b;
+  --red-soft: rgba(229, 83, 75, 0.18);
+  --amber: #d9a13b;
+  --border: #27392f;
+  --accent: #2f9e6e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.app {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+.page h1 {
+  font-size: 28px;
+}
+.tagline {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 18px;
+}
+.intro,
+.privacy {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.privacy {
+  font-size: 13px;
+  margin-top: 32px;
+}
+
+.picker {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+.picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+select,
+input[type='number'] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 15px;
+  min-width: 120px;
+}
+select {
+  min-width: 280px;
+}
+
+button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 15px;
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+button.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+button.secondary {
+  color: var(--muted);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error {
+  background: var(--red-soft);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 12px 0;
+}
+
+/* ---- recite ---- */
+.recite-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.status {
+  font-size: 13px;
+  color: var(--muted);
+}
+.status-live {
+  color: var(--green);
+}
+.status-muted {
+  color: var(--amber);
+}
+
+.mushaf {
+  font-family: 'Amiri Quran', serif;
+  font-size: 34px;
+  line-height: 2.4;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px 32px;
+  margin-top: 16px;
+  text-align: justify;
+}
+.word {
+  border-radius: 6px;
+  padding: 0 2px;
+  transition: background-color 0.3s, color 0.3s;
+}
+.word-ok {
+  color: var(--green);
+}
+.word-missed {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.word-missed-provisional {
+  color: var(--amber);
+  text-decoration: underline dotted;
+}
+.word-current {
+  background: var(--green-soft);
+  outline: 1px solid var(--accent);
+}
+.ayah-marker {
+  color: var(--muted);
+  font-size: 26px;
+}
+.ayah-missed-confirmed .word {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.ayah-missed-provisional .word.word-pending {
+  color: var(--amber);
+}
+
+.legend {
+  display: flex;
+  gap: 18px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.legend .word-ok::before,
+.legend .word-missed::before,
+.legend .word-missed-provisional::before,
+.legend .word-current::before {
+  content: '■ ';
+}
+
+/* ---- jump banner ---- */
+.jump-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-top: 14px;
+}
+.jump-provisional {
+  background: rgba(217, 161, 59, 0.12);
+  border: 1px solid var(--amber);
+}
+.jump-confirmed {
+  background: var(--red-soft);
+  border: 1px solid var(--red);
+}
+.jump-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* ---- summary ---- */
+.stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.stat strong {
+  display: block;
+  font-size: 24px;
+  color: var(--text);
+}
+.stat.ok strong {
+  color: var(--green);
+}
+.stat.bad strong {
+  color: var(--red);
+}
+.clean {
+  color: var(--green);
+  font-size: 18px;
+}
+.error-list {
+  line-height: 1.9;
+  color: var(--muted);
+}
