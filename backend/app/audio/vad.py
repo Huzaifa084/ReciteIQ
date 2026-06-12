@@ -1,5 +1,9 @@
 """Streaming VAD segmenter (D4).
 
+VAD = vendored silero ONNX model via onnxruntime directly — the silero-vad pip
+package hard-imports torch (2.4GB) for a 2MB model; we only need per-window
+speech probability, which is one ONNX session call.
+
 Consumes 16kHz mono s16le PCM frames; yields segments cut either at natural
 silence (`silence_cut_sec` of trailing non-speech) or at the hard cap
 (`segment_max_sec`, with `segment_overlap_sec` carried into the next segment).
@@ -8,13 +12,45 @@ laggy transcription. Silence cuts double as the "wait and listen" pause signal.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
-from silero_vad import VADIterator, load_silero_vad
+import onnxruntime as ort
 
 from app.config import settings
 
 _WINDOW = 512  # silero requirement at 16kHz
+_CONTEXT = 64  # silero v5+: each window must be prefixed with the previous window's tail
+_HYSTERESIS = 0.15  # speech ends below (threshold - this), like silero's min_silence logic
+
+
+class OnnxVAD:
+    """Minimal streaming wrapper: feed 512-sample float32 windows, get P(speech)."""
+
+    def __init__(self):
+        path = Path(settings.asr_model_path).parent / "silero_vad.onnx"
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1
+        self._sess = ort.InferenceSession(str(path), opts, providers=["CPUExecutionProvider"])
+        self.reset()
+
+    def reset(self) -> None:
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros(_CONTEXT, dtype=np.float32)
+
+    def prob(self, window: np.ndarray) -> float:
+        x = np.concatenate([self._context, window.astype(np.float32)]).reshape(1, -1)
+        out, self._state = self._sess.run(
+            None,
+            {
+                "input": x,
+                "state": self._state,
+                "sr": np.array(settings.sample_rate, dtype=np.int64),
+            },
+        )
+        self._context = x[0, -_CONTEXT:]
+        return float(out[0][0])
 
 
 @dataclass
@@ -27,10 +63,7 @@ class Segment:
 
 class StreamSegmenter:
     def __init__(self):
-        self._model = load_silero_vad()
-        self._vad = VADIterator(
-            self._model, threshold=settings.vad_threshold, sampling_rate=settings.sample_rate
-        )
+        self._vad = OnnxVAD()
         self._buf = np.zeros(0, dtype=np.float32)
         self._pending = np.zeros(0, dtype=np.float32)
         self._speech_active = False
@@ -49,14 +82,13 @@ class StreamSegmenter:
 
         while len(self._pending) >= _WINDOW:
             window, self._pending = self._pending[:_WINDOW], self._pending[_WINDOW:]
-            event = self._vad(window)
-            if event is not None:
-                if "start" in event:
-                    self._speech_active = True
-                    self._had_speech = True
-                    self._silence_samples = 0
-                elif "end" in event:
-                    self._speech_active = False
+            p = self._vad.prob(window)
+            if p >= settings.vad_threshold:
+                self._speech_active = True
+                self._had_speech = True
+            elif p < settings.vad_threshold - _HYSTERESIS:
+                self._speech_active = False
+
             self._buf = np.concatenate([self._buf, window])
             self._silence_samples = 0 if self._speech_active else self._silence_samples + _WINDOW
 
