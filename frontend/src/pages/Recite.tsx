@@ -11,18 +11,23 @@ export function Recite({
   surahs,
   surahId,
   startAyah,
+  auto = false,
   onFinished,
   onJumpAccepted,
 }: {
   surahs: SurahInfo[]
-  surahId: number
+  surahId: number | null
   startAyah: number
+  auto?: boolean
   onFinished: (sessionId: string) => void
   onJumpAccepted: (destSurah: number, destAyah: number) => void
 }) {
   const [ayahs, setAyahs] = useState<DisplayAyah[]>([])
   const [state, setState] = useState<ReciteState>(initialState())
-  const [status, setStatus] = useState<'starting' | 'live' | 'muted' | 'error'>('starting')
+  const [status, setStatus] = useState<'starting' | 'detecting' | 'live' | 'muted' | 'error'>(
+    'starting',
+  )
+  const [detectedSurah, setDetectedSurah] = useState<number | null>(auto ? null : surahId)
   const [error, setError] = useState('')
   const sockRef = useRef<SessionSocket | null>(null)
   const recRef = useRef<Recorder | null>(null)
@@ -41,8 +46,8 @@ export function Recite({
     ;(async () => {
       try {
         const [text, session] = await Promise.all([
-          api.surahText(surahId, startAyah),
-          api.createSession(surahId, startAyah),
+          auto ? Promise.resolve([] as DisplayAyah[]) : api.surahText(surahId!, startAyah),
+          api.createSession(surahId, startAyah, auto),
         ])
         if (cancelled) return
         setAyahs(text)
@@ -50,6 +55,13 @@ export function Recite({
 
         const sock = new SessionSocket(session.session_id, {
           onEvents: (events) => setState((prev) => applyEvents(prev, events)),
+          onDetected: (surah, ayah) => {
+            setDetectedSurah(surah)
+            api.surahText(surah, ayah).then((t) => {
+              setAyahs(t)
+              setStatus(mutedRef.current ? 'muted' : 'live')
+            })
+          },
           onEnded: () => {
             teardown()
             onFinished(sessionRef.current)
@@ -69,7 +81,7 @@ export function Recite({
         await rec.start((pcm) => {
           if (!mutedRef.current) sockRef.current?.sendAudio(pcm)
         })
-        if (!cancelled) setStatus('live')
+        if (!cancelled) setStatus(auto ? 'detecting' : 'live')
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : String(e))
@@ -81,7 +93,7 @@ export function Recite({
       cancelled = true
       teardown()
     }
-  }, [surahId, startAyah, teardown, onFinished])
+  }, [surahId, startAyah, auto, teardown, onFinished])
 
   const toggleMute = () => {
     mutedRef.current = !mutedRef.current
@@ -92,17 +104,29 @@ export function Recite({
     sockRef.current?.end() // server replies 'ended' -> onEnded -> summary
   }
 
-  const surah = surahs.find((s) => s.id === surahId)
+  const surah = surahs.find((s) => s.id === detectedSurah)
 
   return (
     <div className="page recite">
       <header className="recite-header">
         <h2>
-          {surah?.name_english} <span dir="rtl">{surah?.name_arabic}</span>
+          {surah ? (
+            <>
+              {surah.name_english} <span dir="rtl">{surah.name_arabic}</span>
+            </>
+          ) : (
+            'ReciteIQ'
+          )}
         </h2>
         <div className="controls">
           <span className={`status status-${status}`}>
-            {status === 'live' ? '● listening' : status === 'muted' ? '⏸ paused' : status}
+            {status === 'live'
+              ? '● listening'
+              : status === 'detecting'
+                ? '◌ detecting location…'
+                : status === 'muted'
+                  ? '⏸ paused'
+                  : status}
           </span>
           <button onClick={toggleMute} disabled={status === 'starting' || status === 'error'}>
             {status === 'muted' ? 'Resume' : 'Pause'}
@@ -114,6 +138,13 @@ export function Recite({
       </header>
 
       {error && <div className="error">{error}</div>}
+
+      {status === 'detecting' && (
+        <div className="detecting-hint">
+          🎙 Just start reciting — ReciteIQ will find the Surah and Ayah from your voice. A few
+          words are usually enough; similar passages may need one more ayah.
+        </div>
+      )}
 
       {state.jump && (
         <JumpBanner
@@ -128,14 +159,16 @@ export function Recite({
         />
       )}
 
-      <MushafView ayahs={ayahs} state={state} />
+      {ayahs.length > 0 && <MushafView ayahs={ayahs} state={state} />}
 
-      <footer className="legend">
-        <span className="word-ok">recited</span>
-        <span className="word-missed">missed</span>
-        <span className="word-missed-provisional">checking…</span>
-        <span className="word-current">current</span>
-      </footer>
+      {ayahs.length > 0 && (
+        <footer className="legend">
+          <span className="word-ok">recited</span>
+          <span className="word-missed">missed</span>
+          <span className="word-missed-provisional">checking…</span>
+          <span className="word-current">current</span>
+        </footer>
+      )}
     </div>
   )
 }

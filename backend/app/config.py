@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     jump_confirm_segments: int = 2             # consecutive segments before MUTASHABEH_JUMP (D5)
     relocation_score_min: float = 0.6          # n-gram containment to consider a relocation
 
+    # --- Auto-detect (start session without choosing Surah/Ayah) ---
+    detect_min_tokens: int = 4                 # don't even search before this many tokens
+    detect_max_tokens: int = 16                # search window cap (longer dilutes diagonals)
+    detect_score_min: float = 0.65             # top hit must be at least this strong
+    detect_margin: float = 0.2                 # ...and beat other locations by this much
+
     # --- WS abuse controls (D3) ---
     max_concurrent_sessions: int = 3
     max_sessions_per_ip: int = 2

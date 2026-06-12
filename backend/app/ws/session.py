@@ -59,24 +59,53 @@ registry = SessionRegistry()
 
 
 class LiveSession:
-    def __init__(self, session_id: uuid.UUID, surah_id: int, start_ayah: int):
+    def __init__(self, session_id: uuid.UUID, surah_id: int | None, start_ayah: int | None):
         self.id = session_id
         self.surah_id = surah_id
         self.start_ayah = start_ayah
-        db = SessionLocal()
-        try:
-            self.ref = load_reference(db, surah_id, start_ayah)
-        finally:
-            db.close()
+        from app.engine.locate import LocationDetector
         from app.mutashabeh.index import get_relocation_index
 
-        self.tracker = RecitationTracker(self.ref, relocation=get_relocation_index())
+        self.tracker: RecitationTracker | None = None
+        self.detector: LocationDetector | None = None
+        if surah_id is not None:
+            self._init_tracker(surah_id, start_ayah or 1, preamble=True)
+        else:
+            self.detector = LocationDetector(get_relocation_index())
         self.segmenter = StreamSegmenter()
         self.started = time.monotonic()
         self.last_frame = time.monotonic()
         self.bytes_received = 0
         self.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0}
         self.detail: list[dict] = []
+
+    def _init_tracker(self, surah_id: int, start_ayah: int, *, preamble: bool) -> None:
+        from app.mutashabeh.index import get_relocation_index
+
+        db = SessionLocal()
+        try:
+            self.ref = load_reference(db, surah_id, start_ayah)
+        finally:
+            db.close()
+        self.surah_id = surah_id
+        self.start_ayah = start_ayah
+        self.tracker = RecitationTracker(
+            self.ref, relocation=get_relocation_index(), preamble=preamble
+        )
+
+    def lock_location(self, surah: int, ayah: int) -> None:
+        """Auto-detect resolved: build the tracker (preamble already consumed by
+        the detector) and persist the location on the session row."""
+        self._init_tracker(surah, ayah, preamble=False)
+        db = SessionLocal()
+        try:
+            row = db.get(DBSessionRow, self.id)
+            row.surah_id = surah
+            row.start_ayah = ayah
+            db.commit()
+        finally:
+            db.close()
+        self.detector = None
 
     # --- ingest rate cap (D3): mic audio cannot arrive faster than real time.
     # A 3s burst allowance absorbs send-then-sleep jitter and reconnect bursts;
@@ -210,9 +239,28 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                     tr = await engine.transcribe(seg.audio, seg.duration)
                     if tr.gated:
                         continue
-                    events = live.tracker.feed_segment(
-                        tokenize(tr.text), forced_cut=seg.starts_with_overlap
-                    )
+                    tokens = tokenize(tr.text)
+
+                    if live.tracker is None:  # auto-detect: still locating
+                        loc = live.detector.feed(tokens)
+                        if loc is None:
+                            await ws.send_json({"type": "detecting"})
+                            continue
+                        replay = live.detector.tokens
+                        live.lock_location(loc.surah, loc.ayah)
+                        await ws.send_json(
+                            {
+                                "type": "detected",
+                                "surah": loc.surah,
+                                "ayah": loc.ayah,
+                                "score": round(loc.score, 3),
+                            }
+                        )
+                        tokens, forced = replay, False  # replay opening through the tracker
+                    else:
+                        forced = seg.starts_with_overlap
+
+                    events = live.tracker.feed_segment(tokens, forced_cut=forced)
                     live.record(events)
                     await asyncio.to_thread(_persist_events, live.id, events)
                     await ws.send_json(
@@ -226,14 +274,15 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
 
             elif (text := msg.get("text")) is not None:
                 ctl = json.loads(text)
-                if ctl.get("type") == "resume":
+                if ctl.get("type") in ("resume", "reposition") and live.tracker is not None:
                     live.tracker.reposition(int(ctl.get("idx", 0)))
                     await ws.send_json({"type": "resumed", "idx": live.tracker.pointer})
-                elif ctl.get("type") == "reposition":
-                    live.tracker.reposition(int(ctl["idx"]))
-                    await ws.send_json({"type": "resumed", "idx": live.tracker.pointer})
                 elif ctl.get("type") == "end":
-                    if (seg := live.segmenter.flush()) is not None and seg.duration > 0.3:
+                    if (
+                        live.tracker is not None
+                        and (seg := live.segmenter.flush()) is not None
+                        and seg.duration > 0.3
+                    ):
                         tr = await engine.transcribe(seg.audio, seg.duration)
                         if not tr.gated:
                             events = live.tracker.feed_segment(tokenize(tr.text))

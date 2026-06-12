@@ -10,6 +10,8 @@ export interface WSCallbacks {
   onEnded: (reason: string) => void
   onRejected: (reason: string) => void
   onStatusChange: (s: 'connecting' | 'open' | 'closed') => void
+  /** Auto-detect resolved: the backend locked onto this location. */
+  onDetected?: (surah: number, ayah: number) => void
 }
 
 export class SessionSocket {
@@ -49,6 +51,8 @@ export class SessionSocket {
           }
         }
         this.cb.onEvents(msg.events)
+      } else if (msg.type === 'detected') {
+        this.cb.onDetected?.(msg.surah, msg.ayah)
       } else if (msg.type === 'ended') {
         this.closedByUs = true
         this.cb.onEnded(msg.reason)

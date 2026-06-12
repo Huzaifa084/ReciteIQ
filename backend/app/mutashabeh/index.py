@@ -53,16 +53,20 @@ class NgramRelocationIndex(RelocationIndex):
         grams = [tuple(tokens[i : i + _N]) for i in range(len(tokens) - _N + 1)]
         if not grams:
             return []
-        # Seed-chain: same (surah, pos - gram_idx) diagonal = one contiguous run
-        diag: dict[tuple[int, int], list[int]] = defaultdict(list)  # (surah, diagonal) -> [start pos]
+        # Seed-chain: same (surah, pos - gram_idx) diagonal = one contiguous run.
+        # The bucket VALUE stores actual stream positions of matched grams: the
+        # run anchor must be the first MATCHED gram's position, not min(pos-i) —
+        # a leading junk token shifts the diagonal and would otherwise anchor
+        # the run one+ words early (e.g. inside the basmalah of Al-Fatiha).
+        diag: dict[tuple[int, int], list[int]] = defaultdict(list)  # (surah, diag bucket) -> [pos]
         for i, g in enumerate(grams):
             for surah, pos in self._inv.get(g, ()):
-                diag[(surah, (pos - i) // (_DIAG_SLACK + 1))].append(pos - i)
+                diag[(surah, (pos - i) // (_DIAG_SLACK + 1))].append(pos)
 
         scored: list[tuple[int, int, int, float]] = []
-        for (surah, _), starts in diag.items():
-            score = len(starts) / len(grams)
-            start_pos = max(0, min(starts))
+        for (surah, _), positions in diag.items():
+            score = len(positions) / len(grams)
+            start_pos = min(positions)
             ayah_id = self._stream_ayah[surah][min(start_pos, len(self._stream_ayah[surah]) - 1)]
             s, n = self._meta[ayah_id]
             scored.append((ayah_id, s, n, score))

@@ -28,19 +28,30 @@ def get_surah_text(surah_id: int, start_ayah: int = 1, db: DBSession = Depends(g
 
 
 class CreateSession(BaseModel):
-    surah_id: int = Field(ge=1, le=114)
+    surah_id: int | None = Field(default=None, ge=1, le=114)
     start_ayah: int = Field(default=1, ge=1)
+    auto: bool = False  # auto-detect: start location-less, lock on from recitation
 
 
 @router.post("/sessions")
 def create_session(body: CreateSession, db: DBSession = Depends(get_db)):
-    surah = db.get(Surah, body.surah_id)
-    if surah is None or body.start_ayah > surah.ayah_count:
-        raise HTTPException(422, "invalid surah/ayah")
-    row = SessionRow(surah_id=body.surah_id, start_ayah=body.start_ayah)
+    if body.auto:
+        row = SessionRow(surah_id=None, start_ayah=None, status="detecting")
+    else:
+        if body.surah_id is None:
+            raise HTTPException(422, "surah_id required unless auto=true")
+        surah = db.get(Surah, body.surah_id)
+        if surah is None or body.start_ayah > surah.ayah_count:
+            raise HTTPException(422, "invalid surah/ayah")
+        row = SessionRow(surah_id=body.surah_id, start_ayah=body.start_ayah)
     db.add(row)
     db.commit()
-    return {"session_id": str(row.id), "surah_id": row.surah_id, "start_ayah": row.start_ayah}
+    return {
+        "session_id": str(row.id),
+        "surah_id": row.surah_id,
+        "start_ayah": row.start_ayah,
+        "auto": body.auto,
+    }
 
 
 @router.post("/sessions/{session_id}/end")

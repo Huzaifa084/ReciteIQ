@@ -11,11 +11,17 @@ export const api = {
   surahText: (surahId: number, startAyah: number): Promise<DisplayAyah[]> =>
     fetch(`/api/surahs/${surahId}/text?start_ayah=${startAyah}`).then((r) => json(r)),
 
-  createSession: (surahId: number, startAyah: number): Promise<{ session_id: string }> =>
+  createSession: (
+    surahId: number | null,
+    startAyah: number,
+    auto = false,
+  ): Promise<{ session_id: string }> =>
     fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ surah_id: surahId, start_ayah: startAyah }),
+      body: JSON.stringify(
+        auto ? { auto: true } : { surah_id: surahId, start_ayah: startAyah },
+      ),
     }).then((r) => json(r)),
 
   endSession: (sessionId: string): Promise<void> =>

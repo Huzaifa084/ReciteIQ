@@ -6,6 +6,13 @@ aligns it word-by-word against the full Uthmani Quran, and flags **missed
 words**, **missed ayahs**, and **Mutashabeh jumps** (drifting into a similar
 verse elsewhere) in real time.
 
+Sessions can start two ways: pick a Surah/Ayah manually, or **Just Recite** —
+auto-detection locates the Surah and Ayah from the opening words (global
+3-gram search with an ambiguity margin: genuinely ambiguous openings like
+الحمد لله رب العالمين, which ends 10:10/37:182/39:75/40:65 verbatim, keep
+listening until one location uniquely wins; isti'adha/basmalah are consumed
+as preamble first).
+
 ## Architecture
 
 ```
@@ -81,6 +88,9 @@ then `… python -m scripts.build_mutashabeh` (migrations run automatically at b
 - Detection (live WS, qari audio): clean recitation → 0 false events; skipped
   ayah → exactly one MISSED_AYAH; Fatiha→Ikhlas drift → MUTASHABEH_JUMP
   confirmed with correct destination (112:1).
+- Auto-detect (live WS): Fatiha from cold start → locked 1:2 after the
+  basmalah (score 0.8), then a clean 0-false-event session; auto-detect
+  composes with jump detection in the same session.
 - Known tuning item: a reciter who *continues* in the jump destination re-alerts
   every ~2 segments — dedup window is a Phase-6 threshold decision.
 

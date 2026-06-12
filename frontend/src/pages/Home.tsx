@@ -4,8 +4,10 @@ import type { SurahInfo } from '../types'
 
 export function Home({
   onStart,
+  onStartAuto,
 }: {
   onStart: (surahs: SurahInfo[], surahId: number, startAyah: number) => void
+  onStartAuto: (surahs: SurahInfo[]) => void
 }) {
   const [surahs, setSurahs] = useState<SurahInfo[]>([])
   const [surahId, setSurahId] = useState(1)
@@ -28,6 +30,15 @@ export function Home({
         ayahs, and Mutashabeh jumps in real time.
       </p>
       {error && <div className="error">{error}</div>}
+      <div className="auto-start">
+        <button className="primary big" disabled={!surahs.length} onClick={() => onStartAuto(surahs)}>
+          🎙 Just Recite
+        </button>
+        <span className="auto-hint">
+          Start reciting anywhere — ReciteIQ detects the Surah and Ayah automatically.
+        </span>
+      </div>
+      <div className="divider">or choose manually</div>
       <div className="picker">
         <label>
           Surah

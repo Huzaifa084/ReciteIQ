@@ -18,11 +18,12 @@ WS = "ws://127.0.0.1:8000"
 CHUNK_MS = 250
 
 
-async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool) -> dict:
-    r = httpx.post(f"{API}/api/sessions", json={"surah_id": surah_id, "start_ayah": start_ayah})
+async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool, auto: bool = False) -> dict:
+    body = {"auto": True} if auto else {"surah_id": surah_id, "start_ayah": start_ayah}
+    r = httpx.post(f"{API}/api/sessions", json=body)
     r.raise_for_status()
     sid = r.json()["session_id"]
-    print(f"session {sid}")
+    print(f"session {sid}{' (auto-detect)' if auto else ''}")
 
     with wave.open(wav_path, "rb") as w:
         assert w.getframerate() == 16000 and w.getnchannels() == 1 and w.getsampwidth() == 2
@@ -46,6 +47,8 @@ async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool) -> dict
                         counts[key] = counts.get(key, 0) + 1
                         if e["type"] != "WORD_OK" and e["type"] != "POSITION":
                             print(f"  {key}: {e['payload']}")
+                elif msg["type"] == "detected":
+                    print(f"  << DETECTED: surah {msg['surah']} ayah {msg['ayah']} (score {msg['score']})")
                 elif msg["type"] in ("ended", "rejected"):
                     print(f"  << {msg}")
                     done.set()
@@ -75,4 +78,4 @@ async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool) -> dict
 if __name__ == "__main__":
     wav, surah = sys.argv[1], int(sys.argv[2])
     start = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 1
-    asyncio.run(run(wav, surah, start, "--fast" in sys.argv))
+    asyncio.run(run(wav, surah, start, "--fast" in sys.argv, "--auto" in sys.argv))

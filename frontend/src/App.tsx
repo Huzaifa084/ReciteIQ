@@ -6,7 +6,7 @@ import type { SurahInfo } from './types'
 
 type Page =
   | { name: 'home' }
-  | { name: 'recite'; surahId: number; startAyah: number }
+  | { name: 'recite'; surahId: number | null; startAyah: number; auto?: boolean }
   | { name: 'summary'; sessionId: string }
 
 export default function App() {
@@ -21,6 +21,10 @@ export default function App() {
             setSurahs(list)
             setPage({ name: 'recite', surahId, startAyah })
           }}
+          onStartAuto={(list) => {
+            setSurahs(list)
+            setPage({ name: 'recite', surahId: null, startAyah: 1, auto: true })
+          }}
         />
       )}
       {page.name === 'recite' && (
@@ -28,6 +32,7 @@ export default function App() {
           surahs={surahs}
           surahId={page.surahId}
           startAyah={page.startAyah}
+          auto={page.auto}
           onFinished={(sessionId) => setPage({ name: 'summary', sessionId })}
           onJumpAccepted={(destSurah, destAyah) =>
             setPage({ name: 'recite', surahId: destSurah, startAyah: destAyah })
