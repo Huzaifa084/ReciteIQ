@@ -190,6 +190,41 @@ def test_jump_suppressed_in_local_neighborhood(ref_fatiha):
     assert not types(ev, EventType.MUTASHABEH_JUMP)
 
 
+# ------------------------------------------- live-caught: false-miss recovery
+
+
+def test_late_match_revokes_confirmed_miss(ref_fatiha):
+    # Live-caught: a mid-word segment cut made ASR drop الرحيم -> MISSED_WORD
+    # confirmed. If the word IS matched later (overlap recovery / reciter goes
+    # back), the verdict must be withdrawn and the summary corrected.
+    tr = RecitationTracker(ref_fatiha, preamble=False)
+    feed_ayahs(tr, ref_fatiha, [1, 2])
+    toks3 = tokens_of(ref_fatiha, 3)  # الرحمن الرحيم
+    ev = tr.feed_segment([toks3[0]])  # الرحيم dropped by ASR
+    ev += tr.feed_segment(tokens_of(ref_fatiha, 4))
+    ev += tr.feed_segment(tokens_of(ref_fatiha, 5))
+    conf = types(ev, EventType.MISSED_WORD, EventState.CONFIRMED)
+    assert len(conf) == 1  # verdict issued...
+    ev2 = tr.feed_segment([toks3[1], *tokens_of(ref_fatiha, 6)])  # الرحيم heard late
+    rev = types(ev2, EventType.MISSED_WORD, EventState.REVOKED)
+    assert len(rev) == 1 and rev[0].refers_to == conf[0].event_id  # ...and withdrawn
+
+
+def test_finish_revokes_dangling_provisionals(ref_fatiha):
+    # Live-caught: session ended while غير المغضوب عليهم ولا sat 'checking…' —
+    # provisionals that never reach k confirmations are dropped at finish().
+    tr = RecitationTracker(ref_fatiha, preamble=False)
+    feed_ayahs(tr, ref_fatiha, range(1, 7))
+    toks7 = tokens_of(ref_fatiha, 7)
+    ev = tr.feed_segment(toks7[:4] + [toks7[-1]])  # tail garbled: jump to last word
+    prov = types(ev, EventType.MISSED_WORD, EventState.PROVISIONAL)
+    assert prov  # words 5..8 provisional
+    ev2 = tr.finish()
+    rev = types(ev2, EventType.MISSED_WORD, EventState.REVOKED)
+    assert {e.refers_to for e in rev} == {e.event_id for e in prov}
+    assert not tr.pending
+
+
 # ----------------------------------------------------------- overlap dedup D4
 
 

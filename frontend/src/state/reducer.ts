@@ -41,9 +41,12 @@ export function applyEvents(prev: ReciteState, events: RIQEvent[]): ReciteState 
           s.provisionalIndex.set(e.event_id, idx)
         } else if (e.state === 'confirmed' && idx !== undefined) {
           s.words.set(idx, 'missed')
-        } else if (e.state === 'revoked' && e.refers_to !== undefined) {
-          const ridx = s.provisionalIndex.get(e.refers_to)
-          if (ridx !== undefined && s.words.get(ridx) === 'missed-provisional') {
+        } else if (e.state === 'revoked') {
+          // revocation payload carries the same word ref — works for both
+          // provisional (end-of-session reconciliation) and confirmed
+          // (late-match recovery) verdicts
+          const ridx = idx ?? (e.refers_to !== undefined ? s.provisionalIndex.get(e.refers_to) : undefined)
+          if (ridx !== undefined && s.words.get(ridx)?.startsWith('missed')) {
             s.words.delete(ridx)
           }
         }

@@ -56,6 +56,11 @@ class RecitationTracker:
         self.pointer = 0
         self.matched: set[int] = set()
         self.pending: dict[int, _PendingMiss] = {}     # ref idx (or -ayah_id for ayah) -> pending
+        # Confirmed misses kept for late-match revocation: if the "missed" word
+        # is matched afterwards (ASR recovered it, or the reciter went back),
+        # the verdict was wrong — withdraw it.
+        self.confirmed_missed: dict[int, Event] = {}   # ref idx -> confirmed MISSED_WORD
+        self.confirmed_missed_ayahs: dict[int, Event] = {}  # ayah_id -> confirmed MISSED_AYAH
         self.relocation = relocation or RelocationIndex()
         self.unmatched_streak: list[str] = []
         self._jump_candidate: tuple[int, dict] | None = None  # (ayah_id, payload)
@@ -168,6 +173,7 @@ class RecitationTracker:
             self._emit_gap(gap, resumed_at=self.ref[m.idx], events=events)
         w = self.ref[m.idx]
         self.matched.add(m.idx)
+        self._revoke_if_recovered(m.idx, events)
         events.append(
             Event(EventType.WORD_OK, EventState.CONFIRMED, {**w.ref(), "score": round(m.score, 1)})
         )
@@ -195,6 +201,7 @@ class RecitationTracker:
                 del self.pending[key]
         self.matched = {i for i in self.matched if i < m.idx}
         self.matched.add(m.idx)
+        self._revoke_if_recovered(m.idx, events)
         events.append(Event(EventType.WORD_OK, EventState.CONFIRMED, {**w.ref(), "score": round(m.score, 1)}))
         self.pointer = m.idx + 1
 
@@ -230,10 +237,37 @@ class RecitationTracker:
         for key, pend in list(self.pending.items()):
             pend.confirms_left -= 1
             if pend.confirms_left <= 0:
-                events.append(
-                    Event(pend.event.type, EventState.CONFIRMED, pend.event.payload, refers_to=pend.event.event_id)
+                conf = Event(
+                    pend.event.type, EventState.CONFIRMED, pend.event.payload, refers_to=pend.event.event_id
                 )
+                events.append(conf)
+                if conf.type == EventType.MISSED_WORD:
+                    self.confirmed_missed[conf.payload["idx"]] = conf
+                elif conf.type == EventType.MISSED_AYAH:
+                    self.confirmed_missed_ayahs[conf.payload["ayah_id"]] = conf
                 del self.pending[key]
+
+    def _revoke_if_recovered(self, idx: int, events: list[Event]) -> None:
+        """A match landed on `idx`: withdraw any earlier missed verdict it disproves."""
+        if idx in self.confirmed_missed:
+            ev = self.confirmed_missed.pop(idx)
+            events.append(Event(EventType.MISSED_WORD, EventState.REVOKED, ev.payload, refers_to=ev.event_id))
+        ayah_id = self.ref[idx].ayah_id
+        if ayah_id in self.confirmed_missed_ayahs:
+            ev = self.confirmed_missed_ayahs.pop(ayah_id)
+            events.append(Event(EventType.MISSED_AYAH, EventState.REVOKED, ev.payload, refers_to=ev.event_id))
+
+    def finish(self) -> list[Event]:
+        """Session ending: resolve dangling provisionals. They never met the
+        evidence bar (k confirming matches), so the benefit of the doubt goes
+        to the reciter — revoke rather than leave 'checking…' forever."""
+        events: list[Event] = []
+        for pend in self.pending.values():
+            events.append(
+                Event(pend.event.type, EventState.REVOKED, pend.event.payload, refers_to=pend.event.event_id)
+            )
+        self.pending.clear()
+        return events
 
     def _check_relocation(self, events: list[Event]) -> None:
         tokens = self.unmatched_streak[-8:]  # ~one breath group; longer windows dilute scores

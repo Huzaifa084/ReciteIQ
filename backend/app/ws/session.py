@@ -119,21 +119,26 @@ class LiveSession:
     def over_duration(self) -> bool:
         return time.monotonic() - self.started > settings.max_session_minutes * 60
 
+    _COUNT_KEY = {
+        EventType.MISSED_WORD: "words_missed",
+        EventType.MISSED_AYAH: "ayahs_missed",
+        EventType.MUTASHABEH_JUMP: "jumps",
+    }
+
     def record(self, events: list[Event]) -> None:
         for e in events:
-            if e.state.value != "confirmed":
-                continue
-            if e.type == EventType.WORD_OK:
-                self.counts["words_ok"] += 1
-            elif e.type == EventType.MISSED_WORD:
-                self.counts["words_missed"] += 1
-                self.detail.append(e.to_dict())
-            elif e.type == EventType.MISSED_AYAH:
-                self.counts["ayahs_missed"] += 1
-                self.detail.append(e.to_dict())
-            elif e.type == EventType.MUTASHABEH_JUMP:
-                self.counts["jumps"] += 1
-                self.detail.append(e.to_dict())
+            if e.state.value == "confirmed":
+                if e.type == EventType.WORD_OK:
+                    self.counts["words_ok"] += 1
+                elif e.type in self._COUNT_KEY:
+                    self.counts[self._COUNT_KEY[e.type]] += 1
+                    self.detail.append(e.to_dict())
+            elif e.state.value == "revoked" and e.type in self._COUNT_KEY:
+                # late-match revocation withdraws an earlier confirmed verdict
+                before = len(self.detail)
+                self.detail = [d for d in self.detail if d["event_id"] != e.refers_to]
+                if len(self.detail) < before:
+                    self.counts[self._COUNT_KEY[e.type]] -= 1
 
 
 def _persist_events(session_id: uuid.UUID, events: list[Event]) -> None:
@@ -286,6 +291,15 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                         tr = await engine.transcribe(seg.audio, seg.duration)
                         if not tr.gated:
                             events = live.tracker.feed_segment(tokenize(tr.text))
+                            live.record(events)
+                            await asyncio.to_thread(_persist_events, live.id, events)
+                            await ws.send_json(
+                                {"type": "events", "events": [e.to_dict() for e in events]}
+                            )
+                    if live.tracker is not None:
+                        # resolve dangling provisionals before the summary
+                        events = live.tracker.finish()
+                        if events:
                             live.record(events)
                             await asyncio.to_thread(_persist_events, live.id, events)
                             await ws.send_json(
