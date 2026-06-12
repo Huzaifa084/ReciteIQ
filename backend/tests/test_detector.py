@@ -193,6 +193,18 @@ def test_jump_suppressed_in_local_neighborhood(ref_fatiha):
 # ----------------------------------------------------------- overlap dedup D4
 
 
+def test_overlap_dedup_never_eats_expected_word(ref_fatiha):
+    # Live-caught regression: segment boundary at Fatiha 6/7 — the new segment
+    # starts with صراط (7:1, the expected word) which fuzzy-matches the
+    # already-matched الصراط (6:2). Dedup must NOT swallow it.
+    tr = RecitationTracker(ref_fatiha, preamble=False)
+    feed_ayahs(tr, ref_fatiha, range(1, 7))  # through ayah 6 (… الصراط المستقيم)
+    toks7 = tokens_of(ref_fatiha, 7)
+    ev = tr.feed_segment(toks7, forced_cut=True)  # starts with صراط
+    assert not types(ev, EventType.MISSED_WORD)
+    assert len(types(ev, EventType.WORD_OK)) == len(toks7)
+
+
 def test_forced_cut_overlap_dedup(ref_fatiha):
     tr = RecitationTracker(ref_fatiha, preamble=False)
     toks = tokens_of(ref_fatiha, 1) + tokens_of(ref_fatiha, 2)

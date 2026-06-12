@@ -283,12 +283,17 @@ class RecitationTracker:
             for i in (self.pointer - 2, self.pointer - 1)
             if i >= 0 and i in self.matched
         ]
+        expected = self.ref[self.pointer].norm if self.pointer < len(self.ref) else ""
         dropped = 0
-        while (
-            tokens
-            and dropped < 2
-            and any(fuzz.ratio(tokens[0], r) >= settings.match_score_min for r in recent)
-        ):
-            tokens = tokens[1:]
-            dropped += 1
+        while tokens and dropped < 2 and recent:
+            recent_score = max(fuzz.ratio(tokens[0], r) for r in recent)
+            # Only a *better* match against the just-matched words than against
+            # the expected next word counts as overlap residue — adjacent ayahs
+            # share near-identical words (الصراط 6:2 vs صراط 7:1) and the
+            # expected word must never be eaten by dedup.
+            if recent_score >= settings.match_score_min and recent_score > fuzz.ratio(tokens[0], expected):
+                tokens = tokens[1:]
+                dropped += 1
+            else:
+                break
         return tokens

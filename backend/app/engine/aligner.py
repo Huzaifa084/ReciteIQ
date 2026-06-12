@@ -42,6 +42,8 @@ class Match:
 
 # Score ties within this epsilon are considered equal quality; position decides.
 _TIE_EPSILON = 4.0
+# Margin above min_score at which the pointer word is accepted outright.
+_POINTER_STICKINESS = 8.0
 
 
 def find_match(
@@ -70,6 +72,15 @@ def find_match(
     hi = min(len(ref), pointer + window_fwd)
     if lo >= hi or not token:
         return None
+
+    # Pointer stickiness: if the expected word itself matches acceptably, take
+    # it. Adjacent ayahs often share near-identical words (e.g. Fatiha 6:2
+    # الصراط vs 7:1 صراط) — without this, an exact match two words back
+    # outscores the 90% match at the pointer and fires a false REPEAT+miss.
+    if lo <= pointer < hi:
+        ptr_score = fuzz.ratio(token, ref[pointer].norm)
+        if ptr_score >= min_score + _POINTER_STICKINESS:
+            return Match(idx=pointer, score=ptr_score)
 
     best: Match | None = None
     best_key: tuple | None = None
