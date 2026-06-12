@@ -81,6 +81,20 @@ class RecitationTracker:
         if forced_cut:
             tokens = self._dedup_overlap(tokens)
 
+        # Segment-level pre-pass: a predominantly off-reference segment is
+        # treated as a block — no per-token advance/rewind. Without this, a
+        # jumped reciter's ubiquitous words (الله fuzzy-matching لله) fire
+        # spurious REPEATs and keep "rescuing" a genuine MUTASHABEH_JUMP.
+        if tokens and not self._preamble_active:
+            hits = sum(1 for t in tokens if find_match(t, self.ref, self.pointer) is not None)
+            if hits / len(tokens) < 0.5 and len(tokens) >= RELOCATION_MIN_STREAK:
+                self.unmatched_streak.extend(tokens)
+                self._check_relocation(events)
+                if self.ref:
+                    cur = self.ref[min(self.pointer, len(self.ref) - 1)]
+                    events.append(Event(EventType.POSITION, EventState.CONFIRMED, cur.ref()))
+                return events
+
         segment_matched_any = False
         for token in tokens:
             if self._preamble_active and self._try_preamble(token, events):
@@ -222,7 +236,7 @@ class RecitationTracker:
                 del self.pending[key]
 
     def _check_relocation(self, events: list[Event]) -> None:
-        tokens = self.unmatched_streak[-12:]
+        tokens = self.unmatched_streak[-8:]  # ~one breath group; longer windows dilute scores
         hits = self.relocation.search(tokens)
         cur = self.ref[min(self.pointer, len(self.ref) - 1)] if self.ref else None
         for ayah_id, surah, ayah_number, score in hits:
@@ -238,7 +252,17 @@ class RecitationTracker:
                 "score": round(score, 3),
                 "tokens": tokens,
             }
-            if self._jump_candidate and self._jump_candidate[0] == ayah_id:
+            # A jumped reciter keeps reciting FORWARD in the destination, so a
+            # hit in the same surah within a few ayahs ahead of the candidate
+            # is the same jump, not a new one.
+            same_jump = False
+            if self._jump_candidate is not None:
+                cand_payload = self._jump_candidate[1]
+                same_jump = (
+                    surah == cand_payload["dest_surah"]
+                    and -1 <= ayah_number - cand_payload["dest_ayah"] <= 3
+                )
+            if same_jump:
                 self._jump_segments += 1
             else:
                 self._jump_candidate = (ayah_id, payload)
@@ -257,6 +281,7 @@ class RecitationTracker:
                 self._jump_candidate = None
                 self._jump_segments = 0
                 self._jump_provisional = None
+                self.unmatched_streak.clear()
             return
 
     def _clear_jump_candidate(self, events: list[Event]) -> None:

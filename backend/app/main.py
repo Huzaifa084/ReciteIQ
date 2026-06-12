@@ -32,8 +32,11 @@ async def ws_endpoint(ws: WebSocket, session_id: str):
 
 
 @app.on_event("startup")
-def warm_model():
-    """Load the Whisper model at boot so the first reciter doesn't pay for it."""
+def warm():
+    """Load the Whisper model and relocation index at boot so the first
+    reciter doesn't pay for either."""
     from app.asr.whisper_local import get_engine
+    from app.mutashabeh.index import get_relocation_index
 
     get_engine()
+    get_relocation_index()

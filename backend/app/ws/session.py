@@ -68,7 +68,9 @@ class LiveSession:
             self.ref = load_reference(db, surah_id, start_ayah)
         finally:
             db.close()
-        self.tracker = RecitationTracker(self.ref)
+        from app.mutashabeh.index import get_relocation_index
+
+        self.tracker = RecitationTracker(self.ref, relocation=get_relocation_index())
         self.segmenter = StreamSegmenter()
         self.started = time.monotonic()
         self.last_frame = time.monotonic()
