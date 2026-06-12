@@ -34,11 +34,14 @@ class LocationDetector:
         self._index = index
         self._tokens: list[str] = []
         self._preamble = list(ISTIADHA) + list(BASMALAH)
+        self.last_hits: list[tuple[int, int, int, float]] = []  # diagnostics for logging
 
     @property
     def tokens(self) -> list[str]:
-        """Post-preamble tokens accumulated so far (for tracker replay)."""
-        return list(self._tokens)
+        """The detection window (for tracker replay) — the SLIDING last-N
+        tokens, matching what the location was actually detected from. Earlier
+        tokens may be pre-warmup junk and must not be replayed."""
+        return list(self._tokens[-settings.detect_max_tokens :])
 
     def feed(self, tokens: list[str]) -> DetectedLocation | None:
         """Accumulate one segment's tokens; return a location once confident."""
@@ -50,7 +53,13 @@ class LocationDetector:
 
         if len(self._tokens) < settings.detect_min_tokens:
             return None
-        hits = self._index.search(self._tokens[: settings.detect_max_tokens])
+        # Sliding window (not the head): early junk tokens age out instead of
+        # permanently poisoning detection. Fuzzy word-level search tolerates
+        # the garbled tokens that break exact n-grams (see search_words).
+        window = self._tokens[-settings.detect_max_tokens :]
+        search = getattr(self._index, "search_words", self._index.search)
+        hits = search(window)
+        self.last_hits = hits
         if not hits:
             return None
         top_id, top_surah, top_ayah, top_score = hits[0]

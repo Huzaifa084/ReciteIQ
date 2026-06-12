@@ -59,17 +59,29 @@ def test_skipped_ayah(ref_fatiha):
 
 
 def test_ayah_restart_is_benign(ref_fatiha):
-    # Recite half of ayah 6, restart it fully: REPEAT, zero confirmed misses
+    # Recite ayah 6 fully, then recite it again (full restart over recited
+    # ground): corroborated backward run -> REPEAT, zero confirmed misses
     tr = RecitationTracker(ref_fatiha, preamble=False)
-    feed_ayahs(tr, ref_fatiha, range(1, 6))
-    toks = tokens_of(ref_fatiha, 6)
-    half = len(toks) // 2
-    ev = tr.feed_segment(toks[:half])
-    ev += tr.feed_segment(toks)  # restart from the top
+    feed_ayahs(tr, ref_fatiha, range(1, 7))
+    ev = tr.feed_segment(tokens_of(ref_fatiha, 6))  # restart ayah 6
     ev += tr.feed_segment(tokens_of(ref_fatiha, 7))
     assert types(ev, EventType.REPEAT)
     assert not types(ev, EventType.MISSED_WORD, EventState.CONFIRMED)
     assert not types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)
+
+
+def test_lone_backward_match_is_ignored(ref_fatiha):
+    # Live-caught: a single stray token matching backward must NOT rewind the
+    # pointer (it caused a spurious REPEAT then false misses after replay)
+    tr = RecitationTracker(ref_fatiha, preamble=False)
+    feed_ayahs(tr, ref_fatiha, range(1, 6))
+    toks5 = tokens_of(ref_fatiha, 5)
+    ev = tr.feed_segment([toks5[0]])  # re-hear of one earlier word (اياك)
+    ev += tr.feed_segment(tokens_of(ref_fatiha, 6))
+    ev += tr.feed_segment(tokens_of(ref_fatiha, 7))
+    assert not types(ev, EventType.REPEAT)
+    assert not types(ev, EventType.MISSED_WORD)
+    assert not types(ev, EventType.MISSED_AYAH)
 
 
 def test_phrase_repeat_is_benign(ref_ikhlas):

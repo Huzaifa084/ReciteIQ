@@ -9,6 +9,7 @@ Privacy (D10): audio stays in memory; only text events are persisted.
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from collections import defaultdict
@@ -27,6 +28,8 @@ from app.db.session import SessionLocal
 from app.engine.detector import RecitationTracker
 from app.engine.events import Event, EventType
 from app.nlp.normalize import tokenize
+
+log = logging.getLogger("reciteiq.session")
 
 
 class SessionRegistry:
@@ -249,8 +252,18 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                     if live.tracker is None:  # auto-detect: still locating
                         loc = live.detector.feed(tokens)
                         if loc is None:
+                            # Diagnostic (text-only, rotated with container logs):
+                            # without this, a session that never locks is undebuggable.
+                            top = live.detector.last_hits[:3] if hasattr(live.detector, "last_hits") else []
+                            log.info(
+                                "detect miss session=%s tokens=%s top=%s",
+                                live.id,
+                                tokens,
+                                [(s, a, round(sc, 2)) for _, s, a, sc in top],
+                            )
                             await ws.send_json({"type": "detecting"})
                             continue
+                        log.info("detect lock session=%s -> %s:%s score=%s", live.id, loc.surah, loc.ayah, loc.score)
                         replay = live.detector.tokens
                         live.lock_location(loc.surah, loc.ayah)
                         await ws.send_json(

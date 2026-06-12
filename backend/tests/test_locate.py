@@ -49,6 +49,30 @@ def test_fatiha_via_basmalah_locks_ayah_2(index, ref_fatiha):
     assert loc is not None and loc.surah == 1 and loc.ayah == 2
 
 
+def test_noisy_transcript_still_detects(index, db):
+    # Live-caught: amateur-mic ASR garbles ~30% of tokens. Exact n-grams die
+    # (every bad token kills 3 grams) but word-level fuzzy chaining must lock.
+    # Simulate the user's Taha session: every 3rd token replaced with garbage.
+    from app.db.repo import load_reference
+
+    ref = load_reference(db, 20)  # Taha
+    toks = [w.norm for w in ref[:14]]  # ayahs 1-4-ish
+    noisy = [("زقزق" if i % 3 == 2 else t) for i, t in enumerate(toks)]
+    det = LocationDetector(index)
+    loc = det.feed(noisy)
+    assert loc is not None and loc.surah == 20 and loc.ayah <= 2
+
+
+def test_junk_head_ages_out_of_window(index, ref_ikhlas):
+    # Mic warm-up junk before real recitation must not poison detection
+    # forever — the sliding window lets it age out.
+    det = LocationDetector(index)
+    assert det.feed(["كركبه", "مهملات", "ضوضاء", "تشويش", "همهمه"]) is None
+    toks = tokens_of(ref_ikhlas, 1) + tokens_of(ref_ikhlas, 2) + tokens_of(ref_ikhlas, 3) + tokens_of(ref_ikhlas, 4)
+    loc = det.feed(toks)
+    assert loc is not None and loc.surah == 112
+
+
 def test_mid_surah_start_detected(index, ref_rahman):
     # Hifz revision often starts mid-surah; ayah 26 (كل من عليها فان) is unique
     det = LocationDetector(index)

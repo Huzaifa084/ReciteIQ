@@ -61,6 +61,7 @@ class RecitationTracker:
         # the verdict was wrong — withdraw it.
         self.confirmed_missed: dict[int, Event] = {}   # ref idx -> confirmed MISSED_WORD
         self.confirmed_missed_ayahs: dict[int, Event] = {}  # ayah_id -> confirmed MISSED_AYAH
+        self._rewind_candidate: Match | None = None    # lone backward match awaiting corroboration
         self.relocation = relocation or RelocationIndex()
         self.unmatched_streak: list[str] = []
         self._jump_candidate: tuple[int, dict] | None = None  # (ayah_id, payload)
@@ -107,6 +108,7 @@ class RecitationTracker:
             m = find_match(token, self.ref, self.pointer)
             if m is None:
                 self.unmatched_streak.append(token)
+                self._rewind_candidate = None  # only the very next token corroborates
                 continue
             segment_matched_any = True
             garbled = len(self.unmatched_streak)  # unmatched tokens consumed since last match
@@ -114,9 +116,23 @@ class RecitationTracker:
             if self._preamble_active:
                 self._preamble_active = False  # real recitation has begun
             if m.idx >= self.pointer:
+                self._rewind_candidate = None
                 self._advance(m, events, garbled=garbled)
+            elif m.idx in self.confirmed_missed or m.idx in self.pending:
+                # Backward hit on a word we called missed = RECOVERY, not
+                # repetition: withdraw the verdict, no pointer rewind.
+                self._recover(m, events)
             else:
-                self._rewind(m, events)
+                # Backward hit on already-recited ground: only a CORROBORATED
+                # run (two consecutive backward tokens) is a real restart —
+                # a lone stray match must not rewind (live-caught: spurious
+                # REPEAT then false misses right after auto-detect replay).
+                cand = self._rewind_candidate
+                if cand is not None and 1 <= m.idx - cand.idx <= 2:
+                    self._rewind_candidate = None
+                    self._rewind(cand, m, events)
+                else:
+                    self._rewind_candidate = m
 
         # Relocation / Mutashabeh check on sustained garbage (D5: never on one token)
         if len(self.unmatched_streak) >= RELOCATION_MIN_STREAK:
@@ -180,9 +196,22 @@ class RecitationTracker:
         self.pointer = m.idx + 1
         self._tick_confirmations(events)
 
-    def _rewind(self, m: Match, events: list[Event]) -> None:
-        # D2: backward match = repetition/restart, never an error.
+    def _recover(self, m: Match, events: list[Event]) -> None:
+        """Late match on a word previously called missed: withdraw the verdict
+        and mark it recited — the pointer does not move."""
+        if m.idx in self.pending:
+            pend = self.pending.pop(m.idx)
+            events.append(
+                Event(pend.event.type, EventState.REVOKED, pend.event.payload, refers_to=pend.event.event_id)
+            )
+        self._revoke_if_recovered(m.idx, events)
+        self.matched.add(m.idx)
         w = self.ref[m.idx]
+        events.append(Event(EventType.WORD_OK, EventState.CONFIRMED, {**w.ref(), "score": round(m.score, 1)}))
+
+    def _rewind(self, first: Match, second: Match, events: list[Event]) -> None:
+        # D2: corroborated backward run = repetition/restart, never an error.
+        w = self.ref[first.idx]
         events.append(
             Event(
                 EventType.REPEAT,
@@ -194,16 +223,19 @@ class RecitationTracker:
         # and forget matches at/after the rewind point so gaps re-evaluate.
         for key, pend in list(self.pending.items()):
             first_idx = pend.event.payload.get("idx", pend.event.payload.get("first_idx", 0))
-            if first_idx >= m.idx:
+            if first_idx >= first.idx:
                 events.append(
                     Event(pend.event.type, EventState.REVOKED, pend.event.payload, refers_to=pend.event.event_id)
                 )
                 del self.pending[key]
-        self.matched = {i for i in self.matched if i < m.idx}
-        self.matched.add(m.idx)
-        self._revoke_if_recovered(m.idx, events)
-        events.append(Event(EventType.WORD_OK, EventState.CONFIRMED, {**w.ref(), "score": round(m.score, 1)}))
-        self.pointer = m.idx + 1
+        self.matched = {i for i in self.matched if i < first.idx}
+        for m in (first, second):
+            self.matched.add(m.idx)
+            self._revoke_if_recovered(m.idx, events)
+            events.append(
+                Event(EventType.WORD_OK, EventState.CONFIRMED, {**self.ref[m.idx].ref(), "score": round(m.score, 1)})
+            )
+        self.pointer = second.idx + 1
 
     def _emit_gap(self, gap: list[RefWord], resumed_at: RefWord, events: list[Event]) -> None:
         # Group gap words by ayah; whole-ayah groups become MISSED_AYAH.
