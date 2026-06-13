@@ -31,6 +31,10 @@ services:
     environment:
       RECITEIQ_DATABASE_URL: postgresql+psycopg://reciteiq:reciteiq@db:5432/reciteiq
       RECITEIQ_ALLOWED_ORIGINS: '["https://reciteiq.wiserhelpdesk.com"]'
+      # ASR engine + secret come from deploy/.env (gitignored). Defaults keep
+      # the local engine if .env is absent, so the public compose has no key.
+      RECITEIQ_ASR_ENGINE: ${RECITEIQ_ASR_ENGINE:-whisper_local}
+      RECITEIQ_GROQ_API_KEY: ${RECITEIQ_GROQ_API_KEY:-}
     volumes:
       - ../backend/models:/app/models:ro
     depends_on:

@@ -22,6 +22,29 @@ from app.config import settings
 
 log = logging.getLogger("reciteiq.asr.cloud")
 
+# NOTE: a Quranic-context `prompt` was tried and removed — whisper-large-v3
+# echoes the prompt text back on short/quiet segments, which is worse than the
+# spam it suppresses. We gate the spam directly instead. The deeper limitation
+# remains: general whisper-large-v3 is NOT Quran-tuned, so it drifts on Uthmani
+# orthography and hallucinates on very short openings (e.g. طه). The local
+# Quran-tuned model is more accurate for this domain — cloud is opt-in for
+# users who prioritise latency on known-surah tracking.
+
+# Known whisper-large-v3 Arabic hallucinations on quiet / ambiguous audio
+# (YouTube-caption training artifacts). Normalized; dropped before alignment.
+_HALLUCINATIONS = {
+    "اشتركوا في القناه",
+    "اشتركوا في القناه وفعلوا الجرس",
+    "لا تنسوا الاشتراك في القناه",
+    "ترجمه نانسي قنقر",
+    "ترجمه",
+    "اشتركوا في القناه ليصلكم كل جديد",
+    "شكرا للمشاهده",
+    "شكرا لكم على المشاهده",
+}
+# NOTE: never blocklist real Quranic phrases (e.g. الحمد لله رب العالمين) — they
+# are legitimate ayat; gating them would break recitation of those verses.
+
 
 def _pcm_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     pcm = np.clip(audio * 32768.0, -32768, 32767).astype("<i2")
@@ -32,6 +55,12 @@ def _pcm_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
         w.setframerate(sample_rate)
         w.writeframes(pcm.tobytes())
     return buf.getvalue()
+
+
+def _is_hallucination(text: str) -> bool:
+    from app.nlp.normalize import normalize
+
+    return normalize(text) in _HALLUCINATIONS
 
 
 class CloudEngine(ASREngine):
@@ -75,6 +104,9 @@ class CloudEngine(ASREngine):
             )
             resp.raise_for_status()
             text = (resp.json().get("text") or "").strip()
+            if _is_hallucination(text):
+                log.info("cloud ASR hallucination gated: %r", text)
+                return Transcript("", True, 1.0, 0.0, 0.0, 0.0)
         except Exception as e:  # network / rate-limit / 5xx → never kill the session
             log.warning("cloud ASR failed (%s); falling back to local", type(e).__name__)
             return await self._local().transcribe(audio, duration)
