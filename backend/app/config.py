@@ -44,8 +44,10 @@ class Settings(BaseSettings):
     # --- Auto-detect (start session without choosing Surah/Ayah) ---
     detect_min_tokens: int = 4                 # don't even search before this many tokens
     detect_max_tokens: int = 16                # search window cap (longer dilutes diagonals)
-    detect_score_min: float = 0.65             # top hit must be at least this strong
-    detect_margin: float = 0.2                 # ...and beat other locations by this much
+    detect_score_min: float = 0.65             # single-window instant-lock threshold
+    detect_margin: float = 0.2                 # ...and must beat other locations by this
+    detect_consensus_floor: float = 0.4        # consensus: per-window floor to count as a vote
+    detect_consensus: int = 3                  # ...same surah leading this many windows -> lock
 
     # --- WS abuse controls (D3) ---
     max_concurrent_sessions: int = 3

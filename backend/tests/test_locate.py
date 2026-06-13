@@ -63,6 +63,27 @@ def test_noisy_transcript_still_detects(index, db):
     assert loc is not None and loc.surah == 20 and loc.ayah <= 2
 
 
+def test_consensus_lock_on_garbled_recitation(index, db):
+    # Live-caught (An-Naba): garbled tokens meant no single window crossed the
+    # 0.65 instant-lock bar, but Surah 78 led every segment. Consensus across
+    # segments must lock it. Feed segment-sized chunks with light garbling.
+    from app.db.repo import load_reference
+
+    ref = load_reference(db, 78)
+    words = [w.norm for w in ref]
+    det = LocationDetector(index)
+    loc = None
+    # feed in ~4-word segments, garbling ~1 word each, like the real session
+    for start in range(0, 24, 4):
+        seg = list(words[start : start + 4])
+        if seg:
+            seg[0] = "زقزق"  # one garbled token per segment
+        loc = det.feed(seg)
+        if loc:
+            break
+    assert loc is not None and loc.surah == 78
+
+
 def test_junk_head_ages_out_of_window(index, ref_ikhlas):
     # Mic warm-up junk before real recitation must not poison detection
     # forever — the sliding window lets it age out.

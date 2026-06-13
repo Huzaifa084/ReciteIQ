@@ -35,6 +35,9 @@ class LocationDetector:
         self._tokens: list[str] = []
         self._preamble = list(ISTIADHA) + list(BASMALAH)
         self.last_hits: list[tuple[int, int, int, float]] = []  # diagnostics for logging
+        self._streak_surah: int | None = None   # consensus: surah leading consecutively
+        self._streak = 0
+        self._streak_best: tuple[float, int, int] = (0.0, 0, 0)  # (score, ayah_id, ayah)
 
     @property
     def tokens(self) -> list[str]:
@@ -63,17 +66,40 @@ class LocationDetector:
         if not hits:
             return None
         top_id, top_surah, top_ayah, top_score = hits[0]
-        if top_score < settings.detect_score_min:
-            return None
-        # Margin vs the best hit at a genuinely different location
-        for ayah_id, surah, ayah, score in hits[1:]:
-            same_location = surah == top_surah and abs(ayah - top_ayah) <= 2
-            if same_location:
-                continue
+
+        # Margin vs the best hit at a genuinely different location (ambiguity guard)
+        unambiguous = True
+        for _ayah_id, surah, ayah, score in hits[1:]:
+            if surah == top_surah and abs(ayah - top_ayah) <= 2:
+                continue  # same location, split across diagonals
             if top_score - score < settings.detect_margin:
-                return None  # ambiguous (e.g. الحمد لله) — keep listening
+                unambiguous = False
             break
-        return DetectedLocation(surah=top_surah, ayah=top_ayah, ayah_id=top_id, score=top_score)
+
+        # Path 1 — instant lock on a single strong, unambiguous window (clean audio)
+        if top_score >= settings.detect_score_min and unambiguous:
+            return DetectedLocation(top_surah, top_ayah, top_id, top_score)
+
+        # Path 2 — consensus lock: a garbled recitation rarely yields one perfect
+        # window, but the right surah keeps winning. Accumulate agreement across
+        # consecutive segments — if the same surah leads `detect_consensus` times
+        # at a moderate score, that's stronger evidence than any single window.
+        # (Live-caught: An-Naba led 5 segments at 0.5–0.56 but never hit 0.65.)
+        if top_score >= settings.detect_consensus_floor and unambiguous:
+            if top_surah == self._streak_surah:
+                self._streak += 1
+                self._streak_best = max(self._streak_best, (top_score, top_id, top_ayah))
+            else:
+                self._streak_surah = top_surah
+                self._streak = 1
+                self._streak_best = (top_score, top_id, top_ayah)
+            if self._streak >= settings.detect_consensus:
+                score, ayah_id, ayah = self._streak_best
+                return DetectedLocation(top_surah, ayah, ayah_id, score)
+        else:
+            self._streak_surah = None
+            self._streak = 0
+        return None
 
     def _try_preamble(self, token: str) -> bool:
         for j, p in enumerate(self._preamble):
