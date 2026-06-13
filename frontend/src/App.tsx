@@ -33,6 +33,7 @@ export default function App() {
           surahId={page.surahId}
           startAyah={page.startAyah}
           auto={page.auto}
+          onHome={() => setPage({ name: 'home' })}
           onFinished={(sessionId) => setPage({ name: 'summary', sessionId })}
           onJumpAccepted={(destSurah, destAyah) =>
             setPage({ name: 'recite', surahId: destSurah, startAyah: destAyah })

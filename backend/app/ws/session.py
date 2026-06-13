@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
-from app.asr.whisper_local import get_engine
+from app.asr import get_engine
 from app.audio.vad import StreamSegmenter
 from app.config import settings
 from app.db.models import Session as DBSessionRow

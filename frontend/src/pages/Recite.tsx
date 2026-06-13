@@ -4,6 +4,7 @@ import { Recorder } from '../audio/recorder'
 import { JumpBanner } from '../components/JumpBanner'
 import { MushafView } from '../components/MushafView'
 import { applyEvents, initialState, type ReciteState } from '../state/reducer'
+import { TopBar } from '../components/TopBar'
 import type { DisplayAyah, SurahInfo } from '../types'
 import { SessionSocket } from '../ws/client'
 
@@ -18,6 +19,7 @@ export function Recite({
   surahId,
   startAyah,
   auto = false,
+  onHome,
   onFinished,
   onJumpAccepted,
 }: {
@@ -25,6 +27,7 @@ export function Recite({
   surahId: number | null
   startAyah: number
   auto?: boolean
+  onHome: () => void
   onFinished: (sessionId: string) => void
   onJumpAccepted: (destSurah: number, destAyah: number) => void
 }) {
@@ -135,6 +138,7 @@ export function Recite({
 
   return (
     <div className="page recite">
+      <TopBar onHome={onHome} confirmLeave={status === 'live' || status === 'detecting'} />
       <header className="recite-header">
         <div className="recite-title">
           <div className="voice-ring" ref={ringRef}>

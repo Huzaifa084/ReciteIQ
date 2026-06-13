@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://reciteiq:reciteiq@127.0.0.1:19832/reciteiq"
 
     # --- ASR (decision 9: strict thread budget on 6 shared cores) ---
-    asr_engine: str = "whisper_local"          # whisper_local | cloud (stub)
+    asr_engine: str = "whisper_local"          # whisper_local | cloud (Groq + local fallback)
+    groq_api_key: str = ""                     # https://console.groq.com (free: 2000 req/day)
+    groq_model: str = "whisper-large-v3-turbo"
+    cloud_timeout_sec: float = 8.0
     asr_model_path: str = "models/whisper-base-ar-quran-ct2"
     asr_compute_type: str = "int8"
     asr_cpu_threads: int = 2                   # per-inference threads

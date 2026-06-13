@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { TopBar } from '../components/TopBar'
 import type { SessionSummaryData, SurahInfo } from '../types'
 
 function AccuracyRing({ pct }: { pct: number }) {
@@ -57,16 +58,35 @@ export function Summary({
 
   const s = data?.summary
   const surah = surahs.find((x) => x.id === data?.surah_id)
-  const clean = s && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0
   const attempted = s ? s.words_ok + s.words_missed : 0
+  // No recitation captured at all → not "flawless", just empty (the screenshot bug)
+  const empty = !s || attempted === 0
+  const clean = s && !empty && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0
+  const issues = s ? s.words_missed + s.ayahs_missed + s.jumps : 0
   const pct = s && attempted > 0 ? Math.round((s.words_ok / attempted) * 100) : 0
   const mins = s ? Math.floor(s.duration_sec / 60) : 0
   const secs = s ? Math.round(s.duration_sec % 60) : 0
 
   return (
     <div className="page summary">
+      <TopBar onHome={onHome} />
       {!s ? (
         <p style={{ color: 'var(--muted)' }}>Preparing your summary…</p>
+      ) : empty ? (
+        <section className="summary-hero panel">
+          <div className="summary-copy">
+            <h2>No recitation captured</h2>
+            <p>
+              We didn't catch any recitation this session. Make sure your microphone is allowed
+              and try again — recite a few words and the tracking begins automatically.
+            </p>
+            <div className="summary-actions" style={{ marginTop: 16 }}>
+              <button className="primary" onClick={onHome}>
+                Try Again
+              </button>
+            </div>
+          </div>
+        </section>
       ) : (
         <>
           <section className="summary-hero panel">
@@ -82,9 +102,9 @@ export function Summary({
                 </div>
               ) : (
                 <p>
-                  {s.words_missed + s.ayahs_missed + s.jumps} thing
-                  {s.words_missed + s.ayahs_missed + s.jumps === 1 ? '' : 's'} to review below —
-                  every slip caught is a slip you won't repeat.
+                  {issues} thing
+                  {issues === 1 ? '' : 's'} to review below — every slip caught is a slip you
+                  won't repeat.
                 </p>
               )}
             </div>
