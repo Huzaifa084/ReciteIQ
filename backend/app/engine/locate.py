@@ -35,9 +35,7 @@ class LocationDetector:
         self._tokens: list[str] = []
         self._preamble = list(ISTIADHA) + list(BASMALAH)
         self.last_hits: list[tuple[int, int, int, float]] = []  # diagnostics for logging
-        self._streak_surah: int | None = None   # consensus: surah leading consecutively
-        self._streak = 0
-        self._streak_best: tuple[float, int, int] = (0.0, 0, 0)  # (score, ayah_id, ayah)
+        self._votes: list[tuple[int, int, int, float]] = []  # (surah, ayah, ayah_id, score) per window
 
     @property
     def tokens(self) -> list[str]:
@@ -80,25 +78,28 @@ class LocationDetector:
         if top_score >= settings.detect_score_min and unambiguous:
             return DetectedLocation(top_surah, top_ayah, top_id, top_score)
 
-        # Path 2 — consensus lock: a garbled recitation rarely yields one perfect
-        # window, but the right surah keeps winning. Accumulate agreement across
-        # consecutive segments — if the same surah leads `detect_consensus` times
-        # at a moderate score, that's stronger evidence than any single window.
-        # (Live-caught: An-Naba led 5 segments at 0.5–0.56 but never hit 0.65.)
-        if top_score >= settings.detect_consensus_floor and unambiguous:
-            if top_surah == self._streak_surah:
-                self._streak += 1
-                self._streak_best = max(self._streak_best, (top_score, top_id, top_ayah))
-            else:
-                self._streak_surah = top_surah
-                self._streak = 1
-                self._streak_best = (top_score, top_id, top_ayah)
-            if self._streak >= settings.detect_consensus:
-                score, ayah_id, ayah = self._streak_best
-                return DetectedLocation(top_surah, ayah, ayah_id, score)
-        else:
-            self._streak_surah = None
-            self._streak = 0
+        # Path 2 — consensus lock by VOTE over a sliding window. A garbled
+        # recitation rarely yields one perfect window, and per-segment margins
+        # oscillate (ties, near-ties), so a consecutive-streak rule keeps
+        # resetting. Instead, count which surah leads the recent segments: if
+        # one dominates, lock it regardless of any single window's margin.
+        # (Live-caught: An-Naba led 7 of 9 segments but a lone margin=0.19
+        # segment kept resetting the old streak.)
+        if top_score >= settings.detect_consensus_floor:
+            self._votes.append((top_surah, top_ayah, top_id, top_score))
+            self._votes = self._votes[-settings.detect_vote_window :]
+            tally: dict[int, int] = {}
+            best: dict[int, tuple[float, int, int]] = {}  # surah -> (score, ayah_id, ayah)
+            for surah, ayah, ayah_id, score in self._votes:
+                tally[surah] = tally.get(surah, 0) + 1
+                if score > best.get(surah, (0.0, 0, 0))[0]:
+                    best[surah] = (score, ayah_id, ayah)
+            ranked = sorted(tally.items(), key=lambda kv: -kv[1])
+            leader, lead_votes = ranked[0]
+            second_votes = ranked[1][1] if len(ranked) > 1 else 0
+            if lead_votes >= settings.detect_consensus and lead_votes - second_votes >= 2:
+                score, ayah_id, ayah = best[leader]
+                return DetectedLocation(leader, ayah, ayah_id, score)
         return None
 
     def _try_preamble(self, token: str) -> bool:

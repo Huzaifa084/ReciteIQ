@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     detect_score_min: float = 0.65             # single-window instant-lock threshold
     detect_margin: float = 0.2                 # ...and must beat other locations by this
     detect_consensus_floor: float = 0.4        # consensus: per-window floor to count as a vote
-    detect_consensus: int = 3                  # ...same surah leading this many windows -> lock
+    detect_consensus: int = 3                  # ...leader needs this many votes in the window
+    detect_vote_window: int = 6                # ...counted over the last N qualifying segments
 
     # --- WS abuse controls (D3) ---
     max_concurrent_sessions: int = 3
