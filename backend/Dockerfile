@@ -11,6 +11,10 @@ print("\n".join(d["project"]["dependencies"] + d["project"]["optional-dependenci
 EOF
 RUN pip install --no-cache-dir -r /tmp/reqs.txt
 
+# Phoneme/encoder-CTC recognizer deps (v1). CPU-only torch to keep the image lean.
+RUN pip install --no-cache-dir torch==2.* --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir "transformers>=4.44,<6"
+
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./

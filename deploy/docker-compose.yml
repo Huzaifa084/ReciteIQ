@@ -35,6 +35,7 @@ services:
       # the local engine if .env is absent, so the public compose has no key.
       RECITEIQ_ASR_ENGINE: ${RECITEIQ_ASR_ENGINE:-whisper_local}
       RECITEIQ_GROQ_API_KEY: ${RECITEIQ_GROQ_API_KEY:-}
+      RECITEIQ_TRACKER_MODE: ${RECITEIQ_TRACKER_MODE:-whisper}
     volumes:
       - ../backend/models:/app/models:ro
     depends_on:
@@ -43,7 +44,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536m
+          memory: 2560m
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }

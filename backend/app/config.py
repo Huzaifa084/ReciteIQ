@@ -14,6 +14,15 @@ class Settings(BaseSettings):
     groq_api_key: str = ""                     # https://console.groq.com (free: 2000 req/day)
     groq_model: str = "whisper-large-v3-turbo"
     cloud_timeout_sec: float = 8.0
+    # Phoneme/encoder-CTC recognizer (v1 ID-space tracker)
+    phoneme_model_path: str = "models/quran-phoneme-ctc-small-v2.pt"
+    tracker_mode: str = "whisper"              # "whisper" (current) | "phoneme" (v1 ID tracker)
+    phoneme_segment_max_sec: float = 25.0      # ≤30s bounded windows (no stitcher in v1)
+    phoneme_silence_cut_sec: float = 0.5       # cut at natural pauses (ayah boundaries)
+    phoneme_detect_min_ids: int = 6            # min query IDs before auto-detect votes
+    phoneme_detect_score_min: float = 0.45     # location lock score floor
+    phoneme_detect_margin: float = 0.18        # top-1 vs top-2 margin to lock
+    phoneme_detect_consensus: int = 2          # consecutive agreeing windows to lock
     asr_model_path: str = "models/whisper-base-ar-quran-ct2"
     asr_compute_type: str = "int8"
     asr_cpu_threads: int = 2                   # per-inference threads

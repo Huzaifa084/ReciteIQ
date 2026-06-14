@@ -51,6 +51,12 @@ class Ayah(Base):
     verse_key: Mapped[str] = mapped_column(String(8), unique=True, index=True)  # "2:255"
     text_uthmani: Mapped[str] = mapped_column(Text)             # full ayah, display convenience
 
+    # v1 encoder-CTC reference (Approach A, model-space IDs). Word-level spans are
+    # intentionally deferred to v2 (D3), so v1 stores ayah-level IDs only.
+    phoneme_ids: Mapped[list[int] | None] = mapped_column(JSONB, nullable=True)
+    phoneme_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # cross-reciter agreement
+    phoneme_unstable: Mapped[bool] = mapped_column(default=False)  # flagged low-consensus
+
     surah: Mapped[Surah] = relationship(back_populates="ayahs")
     words: Mapped[list["Word"]] = relationship(back_populates="ayah", order_by="Word.position")
 

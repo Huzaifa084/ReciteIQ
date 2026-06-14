@@ -7,3 +7,5 @@ models/
 *.egg-info/
 .env
 .pytest_cache/
+phoneme_lab/
+*.pt

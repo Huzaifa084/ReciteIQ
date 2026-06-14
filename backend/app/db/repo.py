@@ -36,6 +36,35 @@ def load_reference(db: DBSession, surah_id: int, start_ayah: int = 1) -> list[Re
     ]
 
 
+def load_phoneme_reference(db: DBSession, surah_id: int, start_ayah: int = 1):
+    """Session reference for the v1 phoneme tracker: ordered RefAyah list with
+    each ayah's model-derived phoneme_ids + its word refs (for WORD_OK bursts).
+    Skips ayahs with no reference yet (batch in progress) or flagged unstable."""
+    from app.engine.phoneme_tracker import RefAyah
+
+    # Enumerate idx across ALL ayahs from start_ayah so word_refs.idx matches the
+    # SPA's MushafView enumeration (which renders every ayah). Only ayahs with a
+    # stable reference become matchable RefAyah entries; unstable/missing ones
+    # still consume their idx range (so highlights never drift) but aren't tracked.
+    ayahs = db.execute(
+        select(Ayah).where(Ayah.surah_id == surah_id, Ayah.number >= start_ayah).order_by(Ayah.number)
+    ).scalars().all()
+    out = []
+    idx = 0
+    for a in ayahs:
+        word_refs = []
+        for w in a.words:
+            word_refs.append(
+                {"surah": surah_id, "ayah": a.number, "position": w.position, "word_id": w.id, "idx": idx}
+            )
+            idx += 1
+        if a.phoneme_unstable or not a.phoneme_ids:
+            continue  # idx already advanced; this ayah just isn't matchable in v1
+        out.append(RefAyah(ayah_id=a.id, surah=surah_id, number=a.number,
+                           ids=list(a.phoneme_ids), word_refs=word_refs))
+    return out
+
+
 def surah_list(db: DBSession) -> list[dict]:
     return [
         {"id": s.id, "name_arabic": s.name_arabic, "name_english": s.name_english, "ayah_count": s.ayah_count}

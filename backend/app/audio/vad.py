@@ -62,7 +62,7 @@ class Segment:
 
 
 class StreamSegmenter:
-    def __init__(self):
+    def __init__(self, max_sec: float | None = None, silence_cut_sec: float | None = None):
         self._vad = OnnxVAD()
         self._buf = np.zeros(0, dtype=np.float32)
         self._pending = np.zeros(0, dtype=np.float32)
@@ -71,9 +71,11 @@ class StreamSegmenter:
         self._silence_samples = 0
         self._starts_with_overlap = False  # state for the segment being built
         self._quiet_pos = -1               # sample offset in _buf of the latest low-prob window end
-        self._max_samples = int(settings.segment_max_sec * settings.sample_rate)
+        max_sec = settings.segment_max_sec if max_sec is None else max_sec
+        silence_cut_sec = settings.silence_cut_sec if silence_cut_sec is None else silence_cut_sec
+        self._max_samples = int(max_sec * settings.sample_rate)
         self._overlap_samples = int(settings.segment_overlap_sec * settings.sample_rate)
-        self._silence_cut = int(settings.silence_cut_sec * settings.sample_rate)
+        self._silence_cut = int(silence_cut_sec * settings.sample_rate)
         self._quiet_lookback = int(1.5 * settings.sample_rate)  # smart-cut search window
 
     def feed(self, pcm_s16le: bytes) -> list[Segment]:
