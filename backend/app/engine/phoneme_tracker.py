@@ -56,6 +56,7 @@ class PhonemeTracker:
     _jump_prov: Event | None = None
     _no_match_run: int = 0                          # consecutive windows that matched nothing
     _uncertain: dict = field(default_factory=dict)  # ref idx -> its provisional UNCERTAIN event
+    _missed: dict = field(default_factory=dict)      # ref idx -> its confirmed MISSED_AYAH event
 
     # ---- tuning (conservative) ----
     MATCH_CER_MAX = 0.45          # window must align to an ayah at least this well to count
@@ -112,8 +113,10 @@ class PhonemeTracker:
                 if k < first and unplaced:
                     self._mark_uncertain(k, events)
                 else:
-                    events.append(Event(EventType.MISSED_AYAH, EventState.CONFIRMED,
-                                        {"surah": a.surah, "ayah": a.number, "ayah_id": a.ayah_id}))
+                    miss = Event(EventType.MISSED_AYAH, EventState.CONFIRMED,
+                                 {"surah": a.surah, "ayah": a.number, "ayah_id": a.ayah_id})
+                    self._missed[k] = miss          # remembered so it can be revoked
+                    events.append(miss)
             for i in chain:
                 self._confirm_ayah(i, events)
             self._no_match_run = 0
@@ -256,10 +259,24 @@ class PhonemeTracker:
             events.append(Event(EventType.UNCERTAIN, EventState.REVOKED,
                                 ev.payload, refers_to=ev.event_id))
 
+    def _revoke_late_miss(self, i: int, events: list[Event]) -> None:
+        """Withdraw a MISSED_AYAH once a later window proves the ayah WAS recited.
+
+        Without this a miss stands forever: measured with carry-forward at 4.0s
+        fragmentation, all 7 ayahs were credited yet one still showed as missed.
+        The Whisper path has had late-match revocation since commit be3264c.
+        """
+        if not settings.phoneme_revoke_late_miss:
+            return
+        if (m := self._missed.pop(i, None)) is not None:
+            events.append(Event(EventType.MISSED_AYAH, EventState.REVOKED,
+                                m.payload, refers_to=m.event_id))
+
     def _confirm_ayah(self, i: int, events: list[Event]) -> None:
         if i in self._recited:
             return
         self._clear_uncertain(i, events)   # a later match resolves it for the reciter
+        self._revoke_late_miss(i, events)
         self._recited.add(i)
         # soft progress: whole-ayah green (NOT a word-level judgement)
         for wr in self.ref[i].word_refs:

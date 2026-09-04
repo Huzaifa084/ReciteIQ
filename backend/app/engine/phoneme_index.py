@@ -28,18 +28,33 @@ class PhonemeIndex:
             db.close()
         self.refs: dict[int, list[int]] = {}          # ayah_id -> id seq
         self.meta: dict[int, tuple[int, int]] = {}     # ayah_id -> (surah, number)
+        self._unstable: set[int] = set()               # low-agreement, still indexed
         self._inv: dict[tuple[int, ...], list[int]] = defaultdict(list)  # gram -> [ayah_id]
         for ayah_id, surah, number, ids, unstable in rows:
-            if unstable or not ids:
-                continue  # skip low-consensus references
+            if not ids:
+                continue  # no reference at all
+            # `phoneme_unstable` is a CONFIDENCE SIGNAL, not an exclusion — the
+            # same policy load_phoneme_reference now uses (P0-2). Excluding here
+            # while including there desynchronised the two consumers: an ayah
+            # could sit in the tracker's reference yet be invisible to the index,
+            # so a reciter at that ayah could never be located or flagged as a
+            # jump destination. Live-caught: 112:1 (conf 0.594) and 113:1 (0.702)
+            # went unstable after the multi-reciter rebuild, which silently broke
+            # jump detection into Al-Ikhlas.
             self.refs[ayah_id] = ids
             self.meta[ayah_id] = (surah, number)
+            if unstable:
+                self._unstable.add(ayah_id)
             for i in range(len(ids) - _N + 1):
                 self._inv[tuple(ids[i:i + _N])].append(ayah_id)
 
     @property
     def size(self) -> int:
         return len(self.refs)
+
+    @property
+    def n_unstable(self) -> int:
+        return len(self._unstable)
 
     def vote(self, query_ids: list[int]) -> list[tuple[int, int, int, float]]:
         """Rank (ayah_id, surah, number, score) by fraction of query n-grams that

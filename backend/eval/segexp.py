@@ -22,6 +22,7 @@ from app.db.repo import load_phoneme_reference
 from app.db.session import SessionLocal
 from app.engine.events import EventState, EventType
 from app.engine.phoneme_tracker import PhonemeTracker
+from app.ws.phoneme_session import CarryBuffer, carry_should_reset
 
 settings.phoneme_ref_rule = "single"          # hold the reference strategy fixed
 
@@ -54,10 +55,12 @@ def run(pcm, surah, cond):
     tr = PhonemeTracker(ref=REF[surah])
     raw = pcm.tobytes()
 
-    carry: list[int] = []
+    settings.phoneme_carry_forward = "carry" in cond
+    settings.phoneme_revoke_late_miss = "revoke" in cond
+    carry = CarryBuffer(cap=CARRY_MAX_IDS)
     held: np.ndarray | None = None
     stats = {"windows": 0, "no_match": 0, "infer_ms": 0, "n_infer": 0,
-             "missed": 0, "cers": [], "durs": []}
+             "missed": 0, "cers": [], "durs": [], "carry_max": 0}
     events = []
 
     def process(audio, duration):
@@ -68,18 +71,20 @@ def run(pcm, surah, cond):
         res = model.recognize(audio)
         stats["infer_ms"] += int((time.perf_counter() - t0) * 1000)
         stats["n_infer"] += 1
-        ids = (carry + res.ids) if "carry" in cond else res.ids
+        ids = (carry.prefix() + res.ids) if "carry" in cond else res.ids
         ev = tr.feed(ids, c_ctc=res.c_ctc)
         events.extend(ev)
         d = tr.last_diag
+        if "carry" in cond:
+            if carry_should_reset(ev, d):
+                carry.reset()
+            else:
+                carry.extend(res.ids)
+            stats["carry_max"] = max(stats["carry_max"], len(carry))
         if d.get("outcome") == "no_match":
             stats["no_match"] += 1
-            if "carry" in cond:
-                carry = (carry + res.ids)[-CARRY_MAX_IDS:]
-        else:
-            carry = []
-            if d.get("chain_mean_cer") is not None:
-                stats["cers"].append(d["chain_mean_cer"])
+        elif d.get("chain_mean_cer") is not None:
+            stats["cers"].append(d["chain_mean_cer"])
 
     CH = 8000
     segments = []
@@ -107,7 +112,12 @@ def run(pcm, surah, cond):
                            if e.type == EventType.MISSED_AYAH and e.state == EventState.CONFIRMED})
     stats["uncertain"] = len({e.payload["ayah"] for e in events
                               if e.type == EventType.UNCERTAIN and e.state == EventState.PROVISIONAL})
+    stats["revoked"] = len({e.payload["ayah"] for e in events
+                            if e.type == EventType.MISSED_AYAH
+                            and e.state == EventState.REVOKED})
     stats["credited"] = credited
+    settings.phoneme_carry_forward = False      # never leak flags between runs
+    settings.phoneme_revoke_late_miss = False
     return stats
 
 
@@ -118,11 +128,13 @@ FIXTURES = [(a, b, int(c)) for a, b, c in zip(sys.argv[1::3], sys.argv[2::3], sy
 for label, path, surah in FIXTURES:
     pcm = read(path)
     print(f"\n=== {label}  ({len(pcm)/16000:.1f}s, tracking surah {surah}, MIN_SEC={MIN_SEC}) ===")
-    print(f"{'condition':<12} {'wins':>5} {'no_match':>9} {'credited':>9} "
-          f"{'missed':>7} {'uncert':>7} {'meanCER':>8} {'infer_ms':>9} {'shortest':>9}")
+    print(f"{'condition':<18} {'wins':>5} {'no_match':>9} {'credited':>9} "
+          f"{'missed':>7} {'revoked':>8} {'uncert':>7} {'meanCER':>8} "
+          f"{'infer_ms':>9} {'carryMax':>9}")
     for cond in CONDS:
         s = run(pcm, surah, cond)
         cer = sum(s["cers"]) / len(s["cers"]) if s["cers"] else float("nan")
-        print(f"{cond:<12} {s['windows']:5d} {s['no_match']:9d} "
-              f"{len(s['credited']):6d}/{len(REF[surah]):<2d} {s['missed']:7d} {s['uncertain']:7d} "
-              f"{cer:8.3f} {s['infer_ms']:9d} {min(s['durs']):9.2f}")
+        print(f"{cond:<18} {s['windows']:5d} {s['no_match']:9d} "
+              f"{len(s['credited']):6d}/{len(REF[surah]):<2d} {s['missed']:7d} "
+              f"{s['revoked']:8d} {s['uncertain']:7d} {cer:8.3f} "
+              f"{s['infer_ms']:9d} {s['carry_max']:9d}")

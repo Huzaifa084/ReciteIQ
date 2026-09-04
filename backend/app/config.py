@@ -51,6 +51,27 @@ class Settings(BaseSettings):
     # recalibrated per rule and per K. Never ship a new rule without measuring FAAR.
     phoneme_ref_rule: str = "single"
     phoneme_ref_max: int = 6                   # cap references considered per ayah
+
+    # --- Segmentation / partial-ayah handling (docs/experiment-segmentation.md) ---
+    # Measured: on identical audio, credited ayahs fall 7/7 -> 6/7 -> 4/7 -> 3/7 as
+    # windows shrink from 31s to 4.0s, 2.5s and 1.5s, because a window shorter than
+    # an ayah cannot match a whole-ayah reference. All DEFAULT OFF so production is
+    # unchanged until A/B'd against a real fragmented browser take.
+    #
+    # carry_forward: an unmatched window's IDs are prepended to the next window's,
+    # so consecutive fragments are matched together. Fixes fragmentation at zero
+    # cost on clean audio (7/7 -> 7/7 natural, 4/7 -> 7/7 at 2.5s) and adds no
+    # inference, since it reuses IDs already computed.
+    phoneme_carry_forward: bool = False
+    phoneme_carry_max_ids: int = 400           # safety cap on the carry buffer
+    # revoke_late_miss: withdraw a MISSED_AYAH when a later window proves the ayah
+    # WAS recited. The Whisper path already does this (detector.py, commit be3264c);
+    # the phoneme tracker emitted misses with no late-match withdrawal at all.
+    phoneme_revoke_late_miss: bool = False
+    # NOTE: raising `phoneme_silence_cut_sec` 0.5 -> 0.7 is the third measured
+    # improvement. It needs no new flag (already RECITEIQ_PHONEME_SILENCE_CUT_SEC)
+    # and the default stays 0.5. Do NOT go to 0.9+: the sweep shows that loses a
+    # correctly recited ayah on clean audio.
     asr_model_path: str = "models/whisper-base-ar-quran-ct2"
     asr_compute_type: str = "int8"
     asr_cpu_threads: int = 2                   # per-inference threads

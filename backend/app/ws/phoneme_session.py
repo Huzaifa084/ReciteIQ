@@ -28,6 +28,46 @@ from app.ws.session import _origin_allowed, registry  # reuse abuse-control regi
 log = logging.getLogger("reciteiq.phoneme_session")
 
 
+class CarryBuffer:
+    """IDs from windows we could not place, held to be re-tried with the next one.
+
+    A window bounded by time can be shorter than an ayah, and a sub-ayah fragment
+    can never match a whole-ayah reference — measured: credited ayahs fall
+    7/7 -> 3/7 as windows shrink from 31s to 1.5s on identical audio. Prepending an
+    unmatched window's IDs to the next lets consecutive fragments be matched
+    together, and costs no extra inference because the IDs already exist.
+
+    Window assembly, not a matching decision, so it stays out of the tracker.
+    """
+
+    def __init__(self, cap: int | None = None):
+        self._ids: list[int] = []
+        self._cap = settings.phoneme_carry_max_ids if cap is None else cap
+
+    def prefix(self) -> list[int]:
+        return list(self._ids)
+
+    def extend(self, ids: list[int]) -> None:
+        """Keep the MOST RECENT ids within the cap — old fragments are the least
+        likely to belong with the next window."""
+        self._ids = (self._ids + list(ids))[-self._cap:]
+
+    def reset(self) -> None:
+        self._ids = []
+
+    def __len__(self) -> int:
+        return len(self._ids)
+
+
+def carry_should_reset(events: list, diag: dict) -> bool:
+    """Carry is speculative, so drop it as soon as we have a confident position:
+    a chained window, or a confirmed jump (which relocates the pointer outright)."""
+    if diag.get("outcome") == "chained":
+        return True
+    return any(e.type == EventType.MUTASHABEH_JUMP and e.state == EventState.CONFIRMED
+               for e in events)
+
+
 def _audio_stats(audio) -> dict:
     """Level stats for the window (P1-7 extension).
 
@@ -143,6 +183,7 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
         return PhonemeTracker(ref=ref, index=get_phoneme_index())
 
     pending: list[list[int]] = []  # window IDs buffered during auto-detect, replayed on lock
+    carry = CarryBuffer()          # unplaced window IDs, re-tried with the next window
     if surah_id is not None:
         tracker = build_tracker(surah_id, start_ayah)
     else:
@@ -234,8 +275,15 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         if replay:
                             await ws.send_json({"type": "events", "events": [e.to_dict() for e in replay]})
                         continue
-                    events = tracker.feed(ids, c_ctc=res.c_ctc)
+                    match_ids = (carry.prefix() + ids) if settings.phoneme_carry_forward else ids
+                    events = tracker.feed(match_ids, c_ctc=res.c_ctc)
                     tally(events)
+                    if settings.phoneme_carry_forward:
+                        if carry_should_reset(events, tracker.last_diag):
+                            carry.reset()
+                        else:
+                            carry.extend(ids)      # raw window only, never the prefix
+                        win["carry_ids"] = len(carry)
                     log.info("phoneme window %s", {**win, **tracker.last_diag})
                     if events:
                         await ws.send_json({
@@ -263,7 +311,10 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         _res = model.recognize(s.audio)
                         _ids = _res.ids
                         _ms = int((time.perf_counter() - _t0) * 1000)
-                        ev = tracker.feed(_ids, c_ctc=_res.c_ctc)
+                        # the final fragment gets the benefit of the carry too —
+                        # reset only AFTER it has been matched
+                        _match = (carry.prefix() + _ids) if settings.phoneme_carry_forward else _ids
+                        ev = tracker.feed(_match, c_ctc=_res.c_ctc)
                         tally(ev)
                         log.info("phoneme window %s", {
                             "session": session_id, "window_sec": round(s.duration, 2),
@@ -278,6 +329,7 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                                 "events": [e.to_dict() for e in ev],
                                 "infer_ms": _ms,
                             })
+                    carry.reset()      # nothing speculative survives the session
                     await ws.send_json({"type": "ended", "reason": "user"})
                     break
     except WebSocketDisconnect:
