@@ -84,10 +84,14 @@ refrain فبأي آلاء ربكما تكذبان occurs **31 times** (30 duplic
 **Runtime:** backend 874 MB of a 2560 MB limit; model `model.pt` 352 MB
 (whisper-small encoder + CTC head, vocab 39, blank id 0).
 
-**Not yet measured — must be, before any accuracy target is set:** end-to-end
-latency of the phoneme path (no `asr_ms` instrumentation exists in
-`phoneme_session.py`), and any accuracy figure on amateur voices. The reported
-~4–5% real-world success is a user observation, not an instrumented metric.
+**Latency — measured after P1-7 landed (2026-09-04):** p50 **4081 ms**, p95 4318 ms,
+max 4318 ms over 4 windows on `fatiha_full.wav`, and **constant with respect to
+window length** (5.09s → 3927 ms; 21.95s → 4081 ms). See §5.3 — this invalidated the
+plan's original `RTF × window_sec` model and produced task **P1-9**.
+
+**Still not measured:** any accuracy figure on amateur voices. The reported ~4–5%
+real-world success is a user observation, not an instrumented metric, and it predates
+the one-ayah-per-window fix.
 
 ---
 
@@ -451,6 +455,40 @@ verbose behind a debug flag.
 `test_segment_closed_reason_reported`; `ws_client` on the eval clips prints
 p50/p95 `infer_ms` and a per-window table.
 
+### P1-9 · Variable-length encoder pass (remove the constant 30s cost)
+
+**File:** `app/asr/phoneme_ctc.py`
+
+**Current behavior.** Every window is padded to 30s and the encoder runs over all
+1500 frames regardless of how much real audio there is. Measured: 3927 ms for 5.09s
+of audio, 4081 ms for 21.95s — a fixed ≈ 4.1s cost. `n_real` discards the padding
+frames *after* paying for them.
+
+**Proposed behavior.** Feed the encoder only the frames that contain audio: slice
+`input_features` to `ceil(duration × 100)` mel frames and slice
+`encoder.embed_positions.weight` to the matching number of output positions
+(`n_frames // 2`, since the conv stack halves the time axis). Keep the 30s path as a
+fallback behind a config flag so it can be A/B'd, and assert the sliced pass returns
+IDs identical to the padded pass on the eval clips.
+
+**Why it fixes a measured problem.** For a 5s window this is ~6× less encoder
+compute (250 frames vs 1500), which is the difference between ~4s and well under a
+second of feedback latency. It is the single largest latency lever available, and it
+costs no accuracy if the positional slice is correct.
+
+**Dependencies / risk.** Independent of the accuracy work; do it after P1-8.
+**Risk: positional-embedding slicing must be exact** — an off-by-one on the conv
+downsampling shifts every position and would silently degrade IDs. That is why the
+acceptance test is bit-identical output against the padded path, not just "looks
+reasonable". Also verify the CTC head's `n_real` trimming is removed rather than
+double-applied once padding is gone.
+
+**How it will be tested.** `test_variable_length_matches_padded` — for clips of 3s,
+10s and 25s, sliced-pass IDs must equal padded-pass IDs exactly;
+`test_variable_length_is_faster` — measured `infer_ms` scales with duration instead
+of staying flat; live re-run of both Fatihah clips must reproduce 29/29-0 and
+one-miss-on-3.
+
 ### P1-8 · Correct anti-aliased decimation inside the AudioWorklet
 
 **File:** `frontend/src/audio/recorder.ts`
@@ -620,24 +658,48 @@ denominator would be fictional.
 
 The phoneme path is **not** a streaming word recogniser. A window is closed by the
 VAD (0.5s trailing silence, or the 25s cap), then **one** CTC forward pass runs over
-the whole window. So latency decomposes as:
+the whole window.
+
+**Measured 2026-09-04 (P1-7, `fatiha_full.wav`, 4 windows):**
+
+| window_sec | closed | infer_ms |
+|---|---|---|
+| 5.09 | silence | 3927 |
+| 21.95 | silence | 4081 |
+| — | p50 / p95 / max | **4081 / 4318 / 4318** |
+
+**Inference cost is CONSTANT, not proportional to window length.** A 5s window costs
+the same as a 22s window, because `_WIN_SAMPLES = 30 * _SR` and the feature
+extractor's `chunk_length=30` pad every window to 30s — the encoder always runs over
+1500 frames, and `n_real` trims only the *output*, after the full forward pass. So:
 
 ```
-t_feedback = t_silence_cut (0.5s) + t_infer (RTF × window_sec) + t_net
+t_feedback = t_silence_cut (0.5s) + t_infer (~4.1s CONSTANT) + t_net
 ```
 
-At the documented RTF ≈ 0.1, a 10s window ≈ 0.5 + 1.0 ≈ **1.5s**; a 25s window
-≈ 0.5 + 2.5 ≈ **3.0s**. A `<= 600 ms` P50 is **architecturally impossible** here —
-words early in a window cannot be scored before the window closes. Two separate
-metrics instead:
+This supersedes the earlier `RTF × window_sec` model, which was wrong. The
+"RTF ≈ 0.1" figure holds only for a *full* 30s window; for a 5s window the effective
+RTF is **0.77**.
 
-- **Per-window processing latency** — window close → UI update. Provisional targets
-  once P1-7 gives a baseline: **P50 ≤ 1.5s, P95 ≤ 3.5s**.
+Two consequences worth stating plainly:
+- The per-window latency floor on this box is ≈ **4.6s**. A `≤ 600 ms` P50 is
+  architecturally impossible, and so are the provisional 1.5s / 3.5s numbers this
+  section previously carried.
+- **Short windows are strictly wasteful.** Since cost is fixed, the efficient move is
+  *longer* windows, not shorter ones — the opposite of a latency-minded design. This
+  is a direct input to P2-5 and to any window-size tuning, and it is only knowable
+  because P1-7 measured it.
+
+**P1-9 removes the constant** (variable-length encoder pass). Targets are set only
+after that lands:
+
+- **Per-window processing latency** — window close → UI update. Post-P1-9 target to
+  be set from measurement; the pre-P1-9 measured baseline is p50 4081 ms.
 - **Time-to-first-feedback** — utterance start → first green. Bounded below by the
-  window length; report the distribution and state it plainly in the thesis.
+  window length; report the distribution, do not reduce it to one number.
 
-Sub-second feedback would require a different design (streaming CTC with incremental
-partial hypotheses). Out of scope for v1; note it as future work.
+Fully streaming sub-second feedback would need incremental partial CTC hypotheses —
+out of scope for v1, noted as future work.
 
 ---
 
@@ -717,7 +779,8 @@ frame; `UNCERTAIN` is a tracker decision.
 | 6 | **P0-2** pilot rebuild + drop the unstable exclusion | **P0** | Depends on 5; removes the ayah-1 penalty. |
 | 7 | **P0-3** CTC posterior confidence | **P0** | Ship with `k_conf = 0` until fitted. Heuristic, not calibration. |
 | 8 | **P0-4** `no_match` + `UNCERTAIN` | **P0** | Needs 7 for `c_ctc`; makes failures visible. → **M1** |
-| 9 | **P1-6** 30s truncation guard | **P1** | Independent, small, removes silent data loss. |
+| 9 | **P1-9** variable-length encoder pass | **P1** | Measured: inference is a flat ~4.1s regardless of window length (§5.3). Largest latency lever; ~6× less compute on a 5s window. |
+| 9b | **P1-6** 30s truncation guard | **P1** | Independent, small, removes silent data loss. Pairs naturally with P1-9. |
 | 10 | **P1-5** beam tracker | **P1** | Most complex; wants good refs + confidence first. Sweep `B` (start 4, not a limit). → **M2** |
 | 11 | **P2-1** word-level spans via CTC frame alignment | **P2** | Restores MISSED_WORD; first point at which a word-level false-`WORD_OK` rate is meaningful. |
 | 12 | **P2-2** speaker enrollment (personal references) | **P2** | Likely large win; natural extension of P0-1's variant list. |
