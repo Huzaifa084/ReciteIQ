@@ -196,3 +196,33 @@ def test_flag_defaults():
     assert fresh.phoneme_carry_forward is False
     assert fresh.phoneme_revoke_late_miss is True
     assert fresh.phoneme_silence_cut_sec == 0.5
+
+
+def test_overlap_residue_is_not_a_restart():
+    """A forced cut replays up to ~2 words; a backward match inside that span is
+    overlap, never a REPEAT.
+
+    Live-caught on Al-Inshiqaq 23: dedup stops at the first token that does not
+    look like residue, so a slightly different rendering of a replayed word
+    survived it, matched backward, and read as a corroborated restart — rewinding
+    3 words and double-crediting them (109 WORD_OK for a 107-word surah).
+    """
+    from app.db.repo import load_reference
+    from app.db.session import SessionLocal
+    from app.engine.detector import RecitationTracker
+    from app.engine.events import EventType
+
+    db = SessionLocal()
+    ref = load_reference(db, 84)
+    db.close()
+
+    tr = RecitationTracker(ref, preamble=False)
+    words = [w.norm for w in ref if w.ayah <= 5]
+    tr.feed_segment(words)
+    tail = words[-2:]
+    # next segment opens with the replayed tail, one of them slightly mangled so
+    # dedup cannot absorb it, then continues correctly
+    nxt = [tail[0], tail[1][:-1] + "ه"] + [w.norm for w in ref if w.ayah == 6]
+    ev = tr.feed_segment(nxt, forced_cut=True)
+    assert not [e for e in ev if e.type == EventType.REPEAT], \
+        "overlap residue must not be reported as a restart"

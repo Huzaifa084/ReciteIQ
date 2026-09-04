@@ -213,6 +213,7 @@ export function Recite({
       {ayahs.length > 0 && (
         <footer className="legend">
           <span><i className="i-ok" /> recited</span>
+          <span><i className="i-heard" /> heard, not confirmed</span>
           <span><i className="i-missed" /> missed</span>
           <span><i className="i-checking" /> checking…</span>
           <span><i className="i-unplaced" /> unplaced (still listening)</span>

@@ -654,6 +654,8 @@ select:focus {
   display: inline-block;
 }
 .legend .i-ok { background: var(--green); }
+/* Matches .word-uncertain: heard, resembles the word, not confirmed. */
+.legend .i-heard { background: var(--green-deep); }
 .legend .i-missed { background: var(--red); }
 .legend .i-checking { background: var(--amber); }
 .legend .i-current { background: transparent; box-shadow: 0 0 0 1.5px var(--green); }

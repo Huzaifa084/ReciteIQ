@@ -99,6 +99,7 @@ class LiveSession:
         self.bytes_received = 0
         self.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
                        "repeats": 0, "uncertain": 0}
+        self.no_match_run = 0        # consecutive windows we heard but could not place
         self.detail: list[dict] = []
 
     def _init_tracker(self, surah_id: int, start_ayah: int, *, preamble: bool) -> None:
@@ -330,6 +331,23 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                             "segment_s": round(seg.duration, 2),
                         }
                     )
+                    # Transport-level signal so the UI can say "heard you but
+                    # cannot place you" instead of sitting on "listening"
+                    # forever. The phoneme path has always sent this; without it
+                    # the FastConformer path leaves an off-reference reciter with
+                    # no feedback at all. A window with speech that produced no
+                    # WORD_OK is exactly that case — including a segment the
+                    # pre-pass blocked as predominantly off-reference.
+                    if tokens and not any(e.type == EventType.WORD_OK for e in events):
+                        live.no_match_run += 1
+                        await ws.send_json({
+                            "type": "no_match",
+                            "run": live.no_match_run,
+                            "tokens": len(tokens),
+                            "pointer": live.tracker.pointer if live.tracker else None,
+                        })
+                    elif tokens:
+                        live.no_match_run = 0
 
             elif (text := msg.get("text")) is not None:
                 ctl = json.loads(text)

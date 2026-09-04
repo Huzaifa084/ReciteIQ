@@ -147,8 +147,17 @@ class RecitationTracker:
         """Process one final ASR segment. `forced_cut=True` means this segment
         follows a hard 5s cut and may start with overlap-duplicated words."""
         events: list[Event] = []
+        overlap_guard = 0
         if forced_cut:
+            before = len(tokens)
             tokens = self._dedup_overlap(tokens)
+            # Dedup stops at the first token that does not look like residue, so
+            # a slightly different rendering of a replayed word survives it and
+            # then matches BACKWARD — which reads as a corroborated restart. That
+            # produced a REPEAT on a clean recitation (live-caught on Al-Inshiqaq
+            # 23, rewinding 3 words and double-crediting them). Within the
+            # replayed span a backward match is overlap, never a restart.
+            overlap_guard = max(0, self._max_overlap_tokens() - (before - len(tokens)))
         tokens = self._merge_multiword(tokens)
 
         # Segment-level pre-pass: a predominantly off-reference segment is
@@ -167,6 +176,8 @@ class RecitationTracker:
 
         segment_matched_any = False
         for token in tokens:
+            if overlap_guard > 0:
+                overlap_guard -= 1
             if self._preamble_active and self._try_preamble(token, events):
                 continue
             m = find_match(token, self.ref, self.pointer)
@@ -192,7 +203,10 @@ class RecitationTracker:
                 # a lone stray match must not rewind (live-caught: spurious
                 # REPEAT then false misses right after auto-detect replay).
                 cand = self._rewind_candidate
-                if cand is not None and 1 <= m.idx - cand.idx <= 2:
+                if overlap_guard > 0:
+                    # still inside the replayed span — residue, not a restart
+                    self._rewind_candidate = None
+                elif cand is not None and 1 <= m.idx - cand.idx <= 2:
                     self._rewind_candidate = None
                     self._rewind(cand, m, events)
                 else:
@@ -507,6 +521,11 @@ class RecitationTracker:
         self._jump_segments = 0
         self._jump_provisional = None
 
+    def _max_overlap_tokens(self) -> int:
+        """How many words the replayed overlap can hold, at ~1.3 words/sec of
+        measured tajweed recitation, with margin."""
+        return max(2, int(settings.segment_overlap_sec * 2) + 1)
+
     def _dedup_overlap(self, tokens: list[str]) -> list[str]:
         """Drop leading tokens that duplicate the words just matched (forced-cut
         overlap, D4). Bounded by how many words the overlap can actually hold:
@@ -514,7 +533,7 @@ class RecitationTracker:
         allow 3 with margin."""
         from rapidfuzz import fuzz
 
-        max_drop = max(2, int(settings.segment_overlap_sec * 2) + 1)
+        max_drop = self._max_overlap_tokens()
         recent = [
             self.ref[i].norm
             for i in range(max(0, self.pointer - max_drop), self.pointer)
