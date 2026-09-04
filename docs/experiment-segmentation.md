@@ -179,3 +179,90 @@ ayah on clean audio).
 - `infer_ms` is CPU-contended across runs; treat latency comparisons as indicative.
 - **No production default was changed.** `phoneme_ref_rule` remains `single` and
   `phoneme_silence_cut_sec` remains 0.5.
+
+---
+
+# Implementation + A/B (2026-09-04)
+
+Implemented behind flags, **all default OFF** (`test_flags_are_off_by_default`
+guards this). Enable per-session with:
+
+```
+RECITEIQ_PHONEME_CARRY_FORWARD=true
+RECITEIQ_PHONEME_REVOKE_LATE_MISS=true
+RECITEIQ_PHONEME_SILENCE_CUT_SEC=0.7      # optional third change
+```
+
+`carry` and `revoke` now run the **shipped** code — `eval/segexp.py` drives
+`CarryBuffer` / `carry_should_reset` from `phoneme_session.py` and the tracker's
+revocation, rather than re-implementing them — so these numbers validate what
+would actually ship.
+
+## Results — current (`baseline`) vs new
+
+| fixture | condition | wins | no_match | credited | missed | **revoked** | CER | infer_ms | carryMax |
+|---|---|---|---|---|---|---|---|---|---|
+| **real recording** (31.0s) | baseline | 3 | 1 | **7/7** | 0 | 0 | 0.212 | 4659 | 0 |
+| | carry | 3 | 1 | **7/7** | 0 | 0 | 0.212 | 4523 | 8 |
+| | carry+revoke | 3 | 1 | **7/7** | 0 | 0 | 0.212 | 4590 | 8 |
+| | sil07+carry+revoke | 3 | 1 | **7/7** | 0 | 0 | 0.210 | 4366 | 8 |
+| **frag 4.0s** | baseline | 11 | 5 | 6/7 | **1** | 0 | 0.267 | 8984 | 0 |
+| | carry | 11 | 4 | **7/7** | 1 | 0 | 0.267 | 6154 | 42 |
+| | carry+revoke | 11 | 4 | **7/7** | 1 | **1** | 0.267 | 5731 | 42 |
+| | sil07+carry+revoke | 10 | 3 | **7/7** | 1 | **1** | **0.223** | 5290 | 31 |
+| **frag 2.5s** | baseline | 14 | 10 | 4/7 | 0 | 0 | 0.157 | 7054 | 0 |
+| | carry | 14 | **7** | **7/7** | 0 | 0 | 0.192 | 6690 | 55 |
+| | carry+revoke | 14 | **7** | **7/7** | 0 | 0 | 0.192 | 5841 | 55 |
+| | sil07+carry+revoke | 14 | **7** | **7/7** | 0 | 0 | 0.228 | 5867 | 35 |
+| **frag 1.5s** | baseline | 21 | 16 | 3/7 | 0 | 0 | 0.326 | 7467 | 0 |
+| | carry | 21 | 15 | 5/7 | 0 | 0 | 0.306 | 7429 | 107 |
+| | carry+revoke | 21 | 15 | 5/7 | 0 | 0 | 0.306 | 7647 | 107 |
+| | sil07+carry+revoke | 18 | 12 | **6/7** | 0 | 0 | 0.324 | 11768* | 70 |
+
+\* CPU-contended; latency figures are indicative only.
+
+### Controls — no false matches under any condition
+
+| control | baseline | carry | carry+revoke | sil07+carry+revoke |
+|---|---|---|---|---|
+| **real skip** (ayah 3 omitted) | 1 missed, 0 revoked | 1 missed, 0 revoked | **1 missed, 0 revoked** | 1 missed, 0 revoked |
+| **wrong surah** (Fatihah vs 112) | **0/4** credited | **0/4** (carryMax 291) | **0/4** (carryMax 291) | **0/4** (carryMax 252) |
+
+Two results matter most here:
+
+- **Revocation never withdraws a genuine miss.** On the real-skip control the miss
+  stands with 0 revocations under every condition — it fires only when a later
+  window actually credits the ayah.
+- **Carry does not manufacture matches.** On the wrong surah it accumulated **291
+  IDs** — nothing ever matched, so nothing ever reset it — and still credited
+  **0/4**. That is the worst case the 400 cap exists for, and it held.
+
+## Verdict
+
+**`carry` + `revoke` is the pick.**
+
+| | effect |
+|---|---|
+| fragmentation | 6/7 → **7/7** (4.0s), 4/7 → **7/7** (2.5s), 3/7 → 5/7 (1.5s) |
+| clean audio | **unchanged** (7/7, identical CER) |
+| standing false misses | frag 4.0s: 1 → **0** (emitted then revoked) |
+| no_match | 10 → 7 (2.5s), 5 → 4 (4.0s) |
+| latency | unchanged or better — no extra inference |
+| carry buffer | peaked at 107 legitimately, 291 worst case, cap 400 |
+| controls | real skip still caught; wrong surah still 0/4 |
+
+Adding **`silence_cut=0.7`** helps most at the heaviest fragmentation (5/7 → 6/7)
+and lowers CER at 4.0s (0.267 → 0.223), at no cost on clean audio. It is a
+reasonable third change but is the least load-bearing of the three.
+
+## Caveat: not yet validated on a browser capture
+
+The "real recording" row is the user's own voice, but it was recorded **outside
+the browser** — it is the take that already worked (3 windows, 7/7). The failing
+session was browser-captured and fragmented, and **no browser-captured audio has
+been available to test**, only its diagnostics. So the fragmented rows remain
+synthetic (silence inserted at fixed intervals, cutting mid-word — harsher than
+real pauses, so likely a lower bound on the benefit).
+
+**Before flipping any default**, capture a browser take on the current build with
+the flags on and compare against the same take with them off.
