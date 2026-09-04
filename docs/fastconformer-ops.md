@@ -83,3 +83,85 @@ per-call cost that short windows pay in full.
 Nothing here argues against the swap — it argues for finishing the engineering
 before switching, exactly as the phoneme path needed P1-9 before its latency was
 acceptable.
+
+
+---
+
+# CORRECTION: the per-window latency problem was a measurement artifact (2026-09-04)
+
+The "4 s window costs 2.70 s" figure above is **wrong**. It was measured with an
+unpinned torch thread budget on a contended box. Re-measured warm, with
+`torch.set_num_threads(2)` (matching `settings.asr_cpu_threads`), on an otherwise
+idle machine:
+
+| window | inference | RTF |
+|---|---|---|
+| 4 s | **667 ms** | 0.167 |
+| 10 s | 1364 ms | 0.136 |
+| 20 s | 1701 ms | 0.085 |
+| 30 s | 3072 ms | 0.102 |
+
+For comparison the current phoneme path does a 5.95 s window in 682 ms. **The two
+are comparable — there is no 4× regression.**
+
+## The direct-inference optimisation was implemented, benchmarked, and REJECTED
+
+A `preprocess -> encoder -> RNN-T decode` path bypassing `transcribe()`'s
+per-call manifest and dataloader was built and measured against it, warm, at four
+window sizes:
+
+| window | `transcribe()` | direct | speedup | text identical? | WER vs `transcribe()` |
+|---|---|---|---|---|---|
+| 4 s | 584 ms | 829 ms | **0.71×** | no | 0.2500 |
+| 10 s | 1032 ms | 1359 ms | **0.76×** | no | 0.0000 |
+| 20 s | 2127 ms | 2172 ms | **0.98×** | no | 0.3846 |
+| 30 s | 5071 ms | 5071 ms | **1.00×** | no | 0.1081 |
+
+It is **never faster** and it **changes the recognised text**, failing the stated
+equivalence criterion. The overhead it was meant to remove did not exist once the
+thread budget was pinned.
+
+Kept instead: `transcribe()`, with `torch.set_num_threads(settings.asr_cpu_threads)`
+and `dither = 0` / `pad_to = 0` set once at load. The rejection is documented in
+`app/asr/fastconformer.py` so it is not blindly retried.
+
+## Corrected concurrency (4 s windows, serialised behind one model)
+
+| sessions | wall | per session | RSS |
+|---|---|---|---|
+| 1 | 0.70 s | 0.70 s | 1668 MB |
+| 2 | 1.41 s | 0.71 s | 1682 MB |
+| 3 | **2.34 s** | 0.78 s | 1690 MB |
+
+Near-linear: throughput holds and the slowest of three sessions waits 2.34 s.
+
+## Lock robustness
+
+| check | result |
+|---|---|
+| lock released after a failed inference | **True** |
+| engine usable after a failure (recovery) | **True**, 0.58 s |
+| 6 interleaved calls, 3 forced to fail | 3 succeeded, 3 raised, **lock free, semaphore free** |
+
+`async with` releases on the exception path, so a failed inference cannot strand
+the lock or the bounded semaphore, and a session is never left stuck.
+
+## Corrected memory
+
+| | RSS |
+|---|---|
+| baseline | 678 MB |
+| after model load | 1613 MB (cold load **9.7 s**) |
+| peak across 1–3 sessions | **1706 MB** |
+
+Still a bare process — the real container adds FastAPI, the DB pool and the VAD
+model against a 2560 MB limit, so this must be confirmed in the container before
+any default change. But the headroom is better than the earlier figures implied.
+
+## Where this leaves the swap
+
+Accuracy: settled. Latency: **comparable to the current path, not a regression**.
+Concurrency: near-linear to 3 sessions. Lock: correct under failure.
+
+The remaining gate is the **live A/B on the validation corpus** and a
+**container-level memory check**. No default has been changed.

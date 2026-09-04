@@ -13,6 +13,15 @@ transcribes what was SPOKEN rather than what was expected:
 See docs/gate-deliberate-errors.md. A recogniser that repairs mistakes is
 useless here: the system can only flag what the model is willing to report.
 
+Uses NeMo's `transcribe()` deliberately. A direct
+preprocess -> encoder -> RNN-T decode path was implemented and benchmarked to
+remove its per-call manifest/dataloader overhead, and **it was rejected**: warm,
+it is 0.71-1.00x the speed of `transcribe()` at 4/10/20/30 s windows (never
+faster) and it changes the recognised text (WER 0.10-0.38 against the
+`transcribe()` output), failing the equivalence criterion. The overhead that
+motivated it turned out to be a measurement artifact of an unpinned thread budget
+on a contended box. See docs/fastconformer-ops.md.
+
 Same contract as whisper_local — one shared model, bounded queue, backpressure
 rather than unbounded pile-up. NeMo has no `no_speech_prob` / `avg_logprob`, so
 those Transcript fields carry neutral values and the hallucination gate that
@@ -37,10 +46,22 @@ class FastConformerEngine(ASREngine):
         from huggingface_hub import hf_hub_download
         from nemo.collections.asr.models import ASRModel
 
+        import torch
+
+        # Pin the thread budget the same way whisper_local does. Measured: with
+        # threads unset and the box contended, a 4s window took 2.70s; pinned and
+        # warm it takes 584ms (RTF 0.146). The earlier figure was a measurement
+        # artifact, not a property of the engine.
+        torch.set_num_threads(settings.asr_cpu_threads)
+
         path = hf_hub_download(repo_id=settings.fastconformer_repo,
                                filename=settings.fastconformer_checkpoint)
         self._model = ASRModel.restore_from(path, map_location="cpu")
         self._model.eval()
+        # transcribe() sets these internally per call; setting them once is
+        # harmless and keeps behaviour explicit. dither injects noise.
+        self._model.preprocessor.featurizer.dither = 0.0
+        self._model.preprocessor.featurizer.pad_to = 0
         self._sem = asyncio.Semaphore(settings.asr_queue_max)
         # NeMo's transcribe() is not re-entrant on a shared model; serialise it.
         self._lock = asyncio.Lock()
