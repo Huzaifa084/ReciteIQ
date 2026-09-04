@@ -244,7 +244,7 @@ class RecitationTracker:
         # attempting was (badly) recited rather than skipped.
         gap = [self.ref[i] for i in range(self.pointer, m.idx) if i not in self.matched]
         if gap and garbled:
-            gap = self._unattributed(gap, garbled)
+            gap = self._unattributed(gap, garbled, events)
         if gap:
             self._emit_gap(gap, resumed_at=self.ref[m.idx], events=events)
         w = self.ref[m.idx]
@@ -256,7 +256,8 @@ class RecitationTracker:
         self.pointer = m.idx + 1
         self._tick_confirmations(events)
 
-    def _unattributed(self, gap: list[RefWord], garbled: list[str]) -> list[RefWord]:
+    def _unattributed(self, gap: list[RefWord], garbled: list[str],
+                      events: list[Event] | None = None) -> list[RefWord]:
         """Gap words that no unmatched token can account for — the real misses.
 
         The credit used to be positional: drop the first len(garbled) gap words,
@@ -285,6 +286,13 @@ class RecitationTracker:
                     best_i, best_score = i, score
             if best_i is not None and best_score >= settings.garbled_attribution_min:
                 pool.pop(best_i)      # one token accounts for at most one word
+                if events is not None:
+                    # Not an error — but not confirmed either. Saying nothing
+                    # leaves the word grey forever, which reads as "tracking
+                    # stopped"; this is the honest third state: we heard
+                    # something here that resembles this word.
+                    events.append(Event(EventType.UNCERTAIN, EventState.CONFIRMED,
+                                        {**w.ref(), "heard_score": round(best_score, 1)}))
             else:
                 unblamed.append(w)
         return unblamed
@@ -330,7 +338,45 @@ class RecitationTracker:
             )
         self.pointer = second.idx + 1
 
+    def _rebalance_gap(self, gap: list[RefWord], events: list[Event]) -> list[RefWord]:
+        """Undo a one-sided mutashabeh shift so a skipped ayah still reads as one.
+
+        Al-Kafirun 3 -> 5 (a named release gate): ayahs 4 and 5 both open with
+        وَلَا, so when the reciter skips ayah 4 the resumed ayah's opening word
+        matches ayah 4's opening word instead of its own. The gap then runs
+        4:2..5:1 — a suffix of the skipped ayah plus a prefix of the resumed one
+        — which is never "a whole ayah", so five scattered MISSED_WORDs were
+        reported where the truth is one skipped ayah.
+
+        When the gap is exactly one ayah long and its leading words were merely
+        displaced by textually identical ones, shift it back: the skipped ayah
+        becomes whole, and the resumed ayah's opening words are credited, since
+        the reciter did say them.
+        """
+        if len(gap) < 2:
+            return gap
+        first_id = gap[0].ayah_id
+        head = [w for w in gap if w.ayah_id == first_id]
+        tail = [w for w in gap if w.ayah_id != first_id]
+        n_skipped = self._ayah_word_count.get(first_id, -1)
+        # The gap must be exactly one ayah's worth, split across two ayahs, with
+        # the missing leading words of the first accounted for by the tail.
+        if not tail or len(gap) != n_skipped or len(head) == n_skipped:
+            return gap
+        k = n_skipped - len(head)                     # displaced leading words
+        if k != len(tail) or gap[0].position != k + 1:
+            return gap
+        lead = [self.ref[i] for i in range(gap[0].idx - k, gap[0].idx)]
+        if len(lead) != k or any(a.norm != b.norm for a, b in zip(lead, tail)):
+            return gap                                # not a textual duplicate
+        for w in tail:                                # the reciter DID say these
+            self.matched.add(w.idx)
+            events.append(Event(EventType.WORD_OK, EventState.CONFIRMED,
+                                {**w.ref(), "score": 100.0}))
+        return lead + head
+
     def _emit_gap(self, gap: list[RefWord], resumed_at: RefWord, events: list[Event]) -> None:
+        gap = self._rebalance_gap(gap, events)
         # Group gap words by ayah; whole-ayah groups become MISSED_AYAH.
         by_ayah: dict[int, list[RefWord]] = {}
         for w in gap:

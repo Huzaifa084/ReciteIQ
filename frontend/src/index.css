@@ -582,6 +582,13 @@ select:focus {
   text-decoration: underline dotted;
   text-underline-offset: 6px;
 }
+/* Heard, resembles this word, not confirmed. Distinct from a provisional MISS:
+   nothing is being alleged, so no underline — just a dimmer green than a
+   confirmed word. Without this the word stayed grey forever, which reads as
+   "tracking stopped". */
+.word-uncertain {
+  color: var(--green-deep);
+}
 .word-current {
   background: var(--green-soft);
   box-shadow: 0 0 0 1px var(--green), 0 0 18px rgba(62, 207, 142, 0.35);

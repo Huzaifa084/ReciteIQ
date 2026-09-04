@@ -35,7 +35,7 @@ export interface RIQEvent {
   refers_to?: number
 }
 
-export type WordStatus = 'pending' | 'ok' | 'missed-provisional' | 'missed'
+export type WordStatus = 'pending' | 'ok' | 'uncertain' | 'missed-provisional' | 'missed'
 
 /** Heard but unplaceable — our uncertainty, never a verdict on the reciter. */
 export type AyahUncertainty = 'provisional'

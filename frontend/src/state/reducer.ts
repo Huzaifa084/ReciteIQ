@@ -62,8 +62,18 @@ export function applyEvents(prev: ReciteState, events: RIQEvent[]): ReciteState 
         break
       }
       case 'UNCERTAIN': {
-        // We heard audio we could not place. Amber, never red — and withdrawn
-        // as soon as the ayah does match.
+        // Amber, never red — this is OUR uncertainty, not a verdict on the
+        // reciter. Two granularities share the type: a word we heard something
+        // for but could not confirm (payload carries idx), and a whole ayah we
+        // could not place at all (payload carries only ayah).
+        if (idx !== undefined) {
+          if (e.state === 'revoked') {
+            if (s.words.get(idx) === 'uncertain') s.words.delete(idx)
+          } else if (s.words.get(idx) !== 'ok') {
+            s.words.set(idx, 'uncertain')   // a later confirmed match still wins
+          }
+          break
+        }
         const ayah = e.payload.ayah as number
         if (e.state === 'revoked') s.uncertainAyahs.delete(ayah)
         else s.uncertainAyahs.add(ayah)
