@@ -73,9 +73,10 @@ class FastConformerEngine(ASREngine):
             # queue full — shed rather than stall the session (same policy as whisper)
             return Transcript("", True, 0.0, 0.0, 0.0, 0.0)
         async with self._sem:
-            t0 = time.perf_counter()
-            text = await asyncio.to_thread(self._transcribe_sync, audio)
-            return Transcript(text, False, 0.0, 0.0, 0.0, time.perf_counter() - t0)
+            async with self._lock:
+                t0 = time.perf_counter()
+                text = await asyncio.to_thread(self._transcribe_sync, audio)
+                return Transcript(text, False, 0.0, 0.0, 0.0, time.perf_counter() - t0)
 
     def _transcribe_sync(self, audio: np.ndarray) -> str:
         # NeMo's transcribe() takes paths, so the segment goes to a temp wav that

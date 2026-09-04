@@ -80,6 +80,32 @@ class RecitationTracker:
 
     # ------------------------------------------------------------------ API
 
+    def _prepass_hits(self, tokens: list[str]) -> int:
+        """Count how many segment tokens follow the reference, dry-running the
+        pointer the way `feed_segment` actually advances it.
+
+        Measuring against a FIXED pointer was wrong for long segments:
+        `find_match` only searches [pointer-back, pointer+fwd), so at most
+        back+fwd (20) ref words are ever reachable. A 34-token window is
+        therefore capped at 20/34 = 0.59 hits and falls under the 0.5 block
+        threshold for being LONG, not for being off-reference -- which froze
+        the pointer on Al-Inshiqaq and then cascaded (every later window really
+        was off-reference by then). The dry run advances a local pointer on
+        each forward match, so a long but faithful recitation scores ~1.0 while
+        a genuine jump still scores near 0: nothing matches, so nothing
+        advances.
+        """
+        probe = self.pointer
+        hits = 0
+        for t in tokens:
+            m = find_match(t, self.ref, probe)
+            if m is None:
+                continue
+            hits += 1
+            if m.idx >= probe:
+                probe = m.idx + 1
+        return hits
+
     def feed_segment(self, tokens: list[str], *, forced_cut: bool = False) -> list[Event]:
         """Process one final ASR segment. `forced_cut=True` means this segment
         follows a hard 5s cut and may start with overlap-duplicated words."""
@@ -92,7 +118,7 @@ class RecitationTracker:
         # jumped reciter's ubiquitous words (الله fuzzy-matching لله) fire
         # spurious REPEATs and keep "rescuing" a genuine MUTASHABEH_JUMP.
         if tokens and not self._preamble_active:
-            hits = sum(1 for t in tokens if find_match(t, self.ref, self.pointer) is not None)
+            hits = self._prepass_hits(tokens)
             if hits / len(tokens) < 0.5 and len(tokens) >= RELOCATION_MIN_STREAK:
                 self.unmatched_streak.extend(tokens)
                 self._check_relocation(events)

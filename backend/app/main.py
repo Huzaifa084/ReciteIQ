@@ -48,6 +48,8 @@ def warm():
     else:
         from app.asr import get_engine
         from app.mutashabeh.index import get_relocation_index
+        from app.audio.vad import OnnxVAD
 
         get_engine()
         get_relocation_index()
+        OnnxVAD()
