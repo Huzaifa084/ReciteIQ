@@ -772,8 +772,8 @@ frame; `UNCERTAIN` is a tracker decision.
 | Order | Task | Priority | Why here |
 |---|---|---|---|
 | 1 | **P1-7** instrumentation | **P0-blocking** | Nothing can be tuned or gated without it. Cheap, zero-risk. |
-| 2 | **`M0-pre`** minimal as-is audio baseline | **P0-blocking** | **Must run BEFORE P1-8**, on the unmodified resampler, so the 1.56% sample-loss/aliasing fix can be quantified separately. Diagnostic only — not the thesis baseline (§6.1). |
-| 3 | **P1-8** worklet decimation | **P0-blocking** | Upstream of every measurement; sample loss + aliasing corrupts all downstream numbers. Frontend-only, so parallel with 5–6. Re-run the `M0-pre` set immediately after to get the delta. |
+| 2 | **`M0-pre`** minimal as-is audio baseline | **DONE 2026-09-04** | Quantified deterministically by porting `recorder.ts` and running device-rate audio through both paths — see `docs/baseline-m0-pre-serverside.md`. Signal damage is severe (−1.57% drift, full-amplitude aliasing) but **downstream tracker output is identical** on clean audio (29/29 words, 0 errors both ways). |
+| 3 | ~~**P1-8** worklet decimation~~ → **moved to P1** | **P1** | **Downgraded on evidence.** Was P0-blocking on the assumption that corrupted input invalidates all measurement; that is falsified for clean audio. Still worth fixing, but it no longer blocks P0-1. Re-test on amateur takes once the corpus exists — their HF content folds differently. |
 | 4 | **`M0`** corpus + formal baseline | **P0** | The reference point for every gate. Measured after P1-7 **and** P1-8. |
 | 5 | **P0-1** multi-reference storage, then scoring-rule comparison | **P0** | Top suspect for the accuracy gap. Storage first; single vs min-CER vs consensus chosen on calibration/validation data. Pilot surahs only. Licensing verified before any public release. |
 | 6 | **P0-2** pilot rebuild + drop the unstable exclusion | **P0** | Depends on 5; removes the ayah-1 penalty. |

@@ -62,3 +62,62 @@ concurrency as a real risk and something to measure properly before any demo.
 Any accuracy figure on amateur voices. The reported ~4–5% is a user observation, it
 predates the one-ayah-per-window fix, and it is not comparable to anything here.
 That gap closes only with the recorded corpus (plan §5.1).
+
+---
+
+# `M0-pre` — resampler defect, quantified (2026-09-04)
+
+The browser resampler could not be measured with `ws_client` (it bypasses
+`recorder.ts`), and a live human take varies between runs. But the defect is
+**purely algorithmic and deterministic**, so it was quantified exactly by porting
+today's loop faithfully and running genuine device-rate audio through both paths.
+
+Source: `001001–001007.mp3` (Husary, 44.1 kHz stereo originals) concatenated and
+decoded to **48 kHz mono**, 46.122s — byte-for-byte the same content as
+`fatiha_full.wav` (46.1225s), so results are directly comparable to the runs above.
+Simulator: `scratchpad/sim_browser_audio.py` (ported from `recorder.ts`, including
+the per-block phase reset and the discarded block tail).
+
+## Signal-level damage: real and severe
+
+| Path | samples | vs ideal | duration | drift |
+|---|---|---|---|---|
+| ideal | 737958 | — | 46.122s | — |
+| **current** | 726390 | **−11568** | 45.399s | **−1.57%** |
+| fixed (FIR + continuous phase) | 737958 | 0 | 46.122s | 0.00% |
+
+- **Time drift −1.57%** — 11,568 samples silently dropped. The recitation is
+  time-compressed, i.e. played back 1.57% fast. Confirms the predicted 1.56%
+  (`floor(128/3) = 42` outputs consume 126 of every 128 input samples).
+- **Aliasing is total, not marginal.** A 12 kHz tone (above the 8 kHz Nyquist of
+  16 kHz audio) folds down to 4 kHz at **−0.9 dB of in-band energy** — the alias
+  *is* the signal. The fixed path removes it completely (0.0).
+- The source genuinely has content to fold: **15.8%** of its 0–8 kHz energy sits
+  in 8–16 kHz.
+
+## Downstream effect on the tracker: none measurable
+
+| Audio | words_ok | Errors | infer_ms p50 |
+|---|---|---|---|
+| `fatiha_cur48.wav` (today's buggy resampler) | **29/29** | **none** | 4020 |
+| `fatiha_fix48.wav` (anti-aliased, correct phase) | **29/29** | **none** | 3906 |
+
+**Identical.** On clean professional recitation the encoder-CTC model is robust to
+both defects: the ayah chain, the credited words and the error count are unchanged.
+
+## Consequence for the plan — P1-8 is downgraded
+
+P1-8 was ordered as **P0-blocking** on the assumption that corrupted input would
+invalidate every downstream measurement. That assumption is now **falsified for
+clean audio**: the numbers above are trustworthy as they stand, and the reference
+work (P0-1) does not need to wait for the resampler.
+
+P1-8 remains worth doing — dropping 1.57% of every recitation and folding full-
+amplitude aliases into the speech band is indefensible in a thesis, and it is cheap
+— but it moves to **P1, after the accuracy work**.
+
+**One open question keeps it on the list:** amateur mics have quite different
+high-frequency content from a studio qari recording — sibilance, mic self-noise,
+room tone, fan hum — and that folds differently. This test cannot settle that.
+Re-run the same A/B on real amateur takes once the corpus exists (plan §5.1); if
+amateur audio *is* sensitive, P1-8 climbs straight back up.
