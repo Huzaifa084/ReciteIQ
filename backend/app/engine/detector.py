@@ -104,7 +104,11 @@ class RecitationTracker:
         while i < len(tokens):
             if i + 1 < len(tokens):
                 joined = f"{tokens[i]} {tokens[i + 1]}"
+                # The join must RECONSTRUCT the unit, not overshoot it. Ratio
+                # alone is not enough: "قل يا ايها" scores 82 against "يا ايها"
+                # simply by containing it, which would swallow the قل before it.
                 if any(fuzz.ratio(joined, u) >= settings.match_score_min
+                       and abs(len(joined) - len(u)) <= 2
                        for u in self._multiword):
                     out.append(joined)
                     i += 2

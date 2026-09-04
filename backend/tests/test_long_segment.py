@@ -14,7 +14,7 @@ import pytest
 from app.config import settings
 from app.db.repo import load_reference
 from app.engine.detector import RecitationTracker
-from app.engine.events import EventType
+from app.engine.events import EventState, EventType
 
 
 @pytest.fixture(scope="module")
@@ -73,3 +73,83 @@ def test_prepass_ratio_scores_a_long_faithful_window_near_one(ref_inshiqaq):
     tr = RecitationTracker(ref_inshiqaq, preamble=False)
     toks = [w.norm for w in ref_inshiqaq if w.ayah <= 9]
     assert tr._prepass_hits(toks) == len(toks)
+
+
+# --------------------------------------------------------- mutashabeh shift
+
+
+@pytest.fixture(scope="module")
+def ref_kafirun(db):
+    return load_reference(db, 109)
+
+
+def test_skipped_ayah_is_one_event_when_the_next_ayah_starts_the_same(ref_kafirun):
+    """Al-Kafirun 3 -> 5, a named release gate.
+
+    Ayahs 4 and 5 both open with وَلَا, so the resumed ayah's opening word
+    matches the SKIPPED ayah's opening word and the gap comes out as 4:2..5:1 —
+    a suffix plus a prefix, never 'a whole ayah'. That produced five scattered
+    MISSED_WORDs instead of one MISSED_AYAH.
+    """
+    tr = RecitationTracker(ref_kafirun, preamble=False)
+    ev = []
+    for ayah in (1, 2, 3, 5, 6):                       # ayah 4 skipped
+        ev += tr.feed_segment([w.norm for w in ref_kafirun if w.ayah == ayah])
+
+    missed_ayahs = {e.payload["ayah"] for e in ev
+                    if e.type == EventType.MISSED_AYAH
+                    and e.state == EventState.CONFIRMED}
+    missed_words = [e for e in ev if e.type == EventType.MISSED_WORD
+                    and e.state == EventState.CONFIRMED]
+    assert missed_ayahs == {4}
+    assert not missed_words
+    # the resumed ayah was actually recited — it must be credited, not eaten
+    ok = _ok_words(ev)
+    assert _full_ayahs(ref_kafirun, ok) >= {5, 6}
+
+
+def test_rebalance_does_not_fire_without_a_textual_duplicate(ref_inshiqaq):
+    """The shift is only undone when the displaced words are genuinely identical;
+    an ordinary mid-ayah skip must still report words, not a whole ayah."""
+    tr = RecitationTracker(ref_inshiqaq, preamble=False)
+    words = [w for w in ref_inshiqaq if w.ayah <= 4]
+    said = [w.norm for w in words if not (w.ayah == 2 and w.position == 2)]
+    ev = tr.feed_segment(said)
+    ev += tr.feed_segment([w.norm for w in ref_inshiqaq if w.ayah in (5, 6)])
+    missed_ayahs = {e.payload["ayah"] for e in ev
+                    if e.type == EventType.MISSED_AYAH
+                    and e.state == EventState.CONFIRMED}
+    assert 2 not in missed_ayahs
+
+
+def test_near_miss_word_is_uncertain_not_silent(ref_inshiqaq):
+    """A word the ASR nearly got is neither confirmed nor an error — it must
+    still say something, or the Mushaf leaves it grey and looks stalled."""
+    tr = RecitationTracker(ref_inshiqaq, preamble=False)
+    from rapidfuzz import fuzz
+    from app.config import settings
+
+    words = [w for w in ref_inshiqaq if w.ayah <= 3]
+    said = [w.norm for w in words]
+    target = words[4]
+    # A token in the band that is "an attempt" but not "a match": above the
+    # attribution floor, below the accept threshold. Built by search so the test
+    # cannot silently drift to one side of either bound.
+    def _candidates(w):
+        for i in range(len(w)):
+            yield w[:i] + "ق" + w[i + 1:]
+        for k in range(1, len(w)):
+            yield w[:k] + "ق" * (len(w) - k)
+
+    garbled = next(
+        c for c in _candidates(target.norm)
+        if settings.garbled_attribution_min <= fuzz.ratio(c, target.norm)
+        < settings.match_score_min
+    )
+    said[4] = garbled
+    ev = tr.feed_segment(said)
+    unc = [e for e in ev if e.type == EventType.UNCERTAIN
+           and e.payload.get("idx") == target.idx]
+    assert unc, "a heard-but-unconfirmed word must emit UNCERTAIN"
+    assert not [e for e in ev if e.type == EventType.MISSED_WORD
+                and e.state == EventState.CONFIRMED]

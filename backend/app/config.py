@@ -1,5 +1,6 @@
 """Central configuration. Everything operational is env-tunable (RECITEIQ_* vars)."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -151,6 +152,33 @@ class Settings(BaseSettings):
 
     # --- Audio format contract with the SPA ---
     sample_rate: int = 16000                   # 16 kHz mono s16le PCM
+
+    @model_validator(mode="after")
+    def _segmentation_follows_the_engine(self):
+        """FastConformer wants long windows; Whisper wants short ones.
+
+        Measured on the 15-case release gate (docs/gate-release.md): at 25s
+        windows the FastConformer path credits 71/74 ayahs across six clean
+        recitations with ZERO false MISSED_WORD/MISSED_AYAH/jump, against 68/74
+        with five false missed words at 5s. Short windows slice words at the
+        boundary, and a sliced word is dropped on BOTH sides.
+
+        The one thing long windows cost is an in-window REPEAT: the RNN-T
+        prediction network collapses an immediately repeated ayah, so it never
+        reaches the detector. That loses a benign observation and raises no
+        false error, which is the right side of the trade.
+
+        Leaving `segment_max_sec` at the Whisper default while shipping
+        FastConformer would silently give up all of that, so the engine picks
+        the window unless the operator set one explicitly.
+        """
+        if self.asr_engine == "fastconformer":
+            fields = self.model_fields_set
+            if "segment_max_sec" not in fields:
+                self.segment_max_sec = 25.0
+            if "silence_cut_sec" not in fields:
+                self.silence_cut_sec = 0.5
+        return self
 
 
 settings = Settings()
