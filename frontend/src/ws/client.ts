@@ -39,6 +39,12 @@ export class SessionSocket {
     this.ws.onopen = () => {
       this.reconnectAttempts = 0
       this.cb.onStatusChange('open')
+      // tell the backend which capture mode this take used, so the per-window
+      // diagnostics can be correlated when A/B-ing ?rawaudio=1
+      this.ws!.send(JSON.stringify({
+        type: 'client_info',
+        raw_audio: new URLSearchParams(location.search).get('rawaudio') === '1',
+      }))
       if (this.lastConfirmedIdx > 0) {
         this.ws!.send(JSON.stringify({ type: 'resume', idx: this.lastConfirmedIdx }))
       }

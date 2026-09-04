@@ -17,6 +17,10 @@ import re
 import sys
 
 _WIN = re.compile(r"phoneme window (\{.*\})")
+_INFO = re.compile(r"phoneme client_info (\{.*\})")
+
+
+modes: dict[str, object] = {}   # session -> raw_audio flag from client_info
 
 
 def parse(stream):
@@ -28,6 +32,13 @@ def parse(stream):
             msg = json.loads(line).get("msg", "")
         except (json.JSONDecodeError, AttributeError):
             msg = line
+        if (i := _INFO.search(msg)) is not None:
+            try:
+                info = ast.literal_eval(i.group(1))
+                modes[info.get("session", "?")] = info.get("raw_audio")
+            except (ValueError, SyntaxError):
+                pass
+            continue
         m = _WIN.search(msg)
         if not m:
             continue
@@ -62,6 +73,10 @@ def main():
 
     sessions = sorted({r.get("session", "?") for r in rows})
     print(f"{len(rows)} windows across {len(sessions)} session(s)")
+    for sid in sessions:
+        if sid in modes:
+            print(f"  {sid[:8]}  raw_audio={modes[sid]} "
+                  f"({'WebRTC processing OFF' if modes[sid] else 'WebRTC processing ON'})")
     def _f(v, spec, dash="-"):
         return dash if v is None else format(v, spec)
 

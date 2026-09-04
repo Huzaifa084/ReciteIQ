@@ -305,6 +305,14 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
 
             elif (text := msg.get("text")) is not None:
                 ctl = json.loads(text)
+                if ctl.get("type") == "client_info":
+                    # capture mode for this take, so windows can be attributed
+                    # when A/B-ing WebRTC processing on vs off
+                    log.info("phoneme client_info %s", {
+                        "session": session_id,
+                        "raw_audio": bool(ctl.get("raw_audio")),
+                    })
+                    continue
                 if ctl.get("type") == "end":
                     if (s := seg.flush()) is not None and tracker is not None:
                         _t0 = time.perf_counter()
