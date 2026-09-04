@@ -362,6 +362,12 @@ def finalize_session(session_id: uuid.UUID) -> None:
                     detail.append(e.payload)
             row.status = "ended"
             row.ended_at = datetime.now(timezone.utc)
+            # An aggregation that found nothing is not evidence the session was
+            # empty — it can simply mean this tracker persists no event rows.
+            # Never overwrite a summary that another finaliser already wrote.
+            if not events and db.get(SessionSummary, session_id) is not None:
+                db.commit()
+                return
             db.merge(SessionSummary(session_id=session_id, **counts, detail={"errors": detail}))
             db.commit()
         finally:

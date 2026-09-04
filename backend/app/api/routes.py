@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session as DBSession
 from app.db.models import Session as SessionRow
 from app.db.models import SessionSummary, Surah
 from app.db.repo import ayah_display, surah_list
-from app.db.session import get_db
+from app.config import settings
+from app.db.session import SessionLocal, get_db
 from app.ws.session import finalize_session
 
 router = APIRouter(prefix="/api")
@@ -56,8 +57,34 @@ def create_session(body: CreateSession, db: DBSession = Depends(get_db)):
 
 @router.post("/sessions/{session_id}/end")
 def end_session(session_id: uuid.UUID):
-    finalize_session(session_id)
+    """Explicit end from the SPA.
+
+    The phoneme tracker finalises its own summary when the socket closes and
+    persists NO `session_events` rows, so running the Whisper finaliser here
+    aggregated zero events and overwrote that summary with zeros — every browser
+    session reported "No recitation captured" no matter how well it tracked.
+    `ws_client` never calls this endpoint, which is why the CLI runs looked fine.
+    """
+    if settings.tracker_mode == "phoneme":
+        _mark_ended(session_id)
+    else:
+        finalize_session(session_id)
     return {"ok": True}
+
+
+def _mark_ended(session_id: uuid.UUID) -> None:
+    """Mark the row ended without touching the summary the WS handler wrote."""
+    from datetime import datetime, timezone
+
+    db = SessionLocal()
+    try:
+        row = db.get(SessionRow, session_id)
+        if row is not None and row.status != "ended":
+            row.status = "ended"
+            row.ended_at = datetime.now(timezone.utc)
+            db.commit()
+    finally:
+        db.close()
 
 
 @router.get("/sessions/{session_id}/summary")

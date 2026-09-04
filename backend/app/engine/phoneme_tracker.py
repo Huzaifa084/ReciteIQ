@@ -57,6 +57,7 @@ class PhonemeTracker:
     _no_match_run: int = 0                          # consecutive windows that matched nothing
     _uncertain: dict = field(default_factory=dict)  # ref idx -> its provisional UNCERTAIN event
     _missed: dict = field(default_factory=dict)      # ref idx -> its confirmed MISSED_AYAH event
+    _anchored: bool = False                          # has any window ever chained?
 
     # ---- tuning (conservative) ----
     MATCH_CER_MAX = 0.45          # window must align to an ayah at least this well to count
@@ -105,7 +106,16 @@ class PhonemeTracker:
             #
             # Live-caught: a take that recited all 7 ayahs of Al-Fatihah chained
             # only [4] and [6], and the old rule turned ayahs 1, 2, 3 and 5 red.
-            unplaced = self._no_match_run > 0 or low_conf
+            # Session-start anchor rule: before ANY window has chained we have no
+            # evidence of where the reciter began, so a leading gap cannot be a
+            # skip. Live-caught on Al-Fatihah, twice in six takes: 1:3
+            # (الرحمن الرحيم) is literally the last two words of 1:1, and its
+            # reference sits inside ayah 1's at CER 0.125 — so the FIRST window,
+            # holding only the basmalah, chains to ayah 3 and the old rule turned
+            # ayahs 1-2 red. P0-4 could not catch it because it keys on
+            # `_no_match_run > 0`, which is necessarily 0 at session start.
+            # Once a valid anchor exists, normal skip detection resumes.
+            unplaced = self._no_match_run > 0 or low_conf or not self._anchored
             for k in range(self.pointer, last):
                 if k in matched or k in self._recited:
                     continue
@@ -119,6 +129,7 @@ class PhonemeTracker:
                     events.append(miss)
             for i in chain:
                 self._confirm_ayah(i, events)
+            self._anchored = True          # we now have a trustworthy position
             self._no_match_run = 0
             self.pointer = last + 1
             cur = self.ref[min(self.pointer, len(self.ref) - 1)]

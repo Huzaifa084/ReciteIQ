@@ -188,10 +188,11 @@ def test_carry_cap_defaults_from_config():
     assert len(c) == 7
 
 
-def test_flags_are_off_by_default():
-    """Production must be unchanged until the A/B says otherwise."""
+def test_flag_defaults():
+    """carry stays off pending a browser A/B; revocation was ENABLED after two of
+    six live takes left a MISSED_AYAH standing on an ayah a later window credited."""
     from app.config import Settings
     fresh = Settings()
     assert fresh.phoneme_carry_forward is False
-    assert fresh.phoneme_revoke_late_miss is False
+    assert fresh.phoneme_revoke_late_miss is True
     assert fresh.phoneme_silence_cut_sec == 0.5

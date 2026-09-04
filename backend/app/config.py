@@ -67,7 +67,11 @@ class Settings(BaseSettings):
     # revoke_late_miss: withdraw a MISSED_AYAH when a later window proves the ayah
     # WAS recited. The Whisper path already does this (detector.py, commit be3264c);
     # the phoneme tracker emitted misses with no late-match withdrawal at all.
-    phoneme_revoke_late_miss: bool = False
+    # ENABLED 2026-09-04: two of six live takes showed a MISSED_AYAH standing on
+    # an ayah that a LATER window then credited (Al-Fatihah 1:2, after the first
+    # window anchored on 1:3). A verdict contradicted by later evidence must be
+    # withdrawn, so this is on by default; the flag remains for rollback.
+    phoneme_revoke_late_miss: bool = True
     # NOTE: raising `phoneme_silence_cut_sec` 0.5 -> 0.7 is the third measured
     # improvement. It needs no new flag (already RECITEIQ_PHONEME_SILENCE_CUT_SEC)
     # and the default stays 0.5. Do NOT go to 0.9+: the sweep shows that loses a
