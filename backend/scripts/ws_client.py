@@ -32,6 +32,7 @@ async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool, auto: b
     chunk_bytes = int(16000 * 2 * CHUNK_MS / 1000)
     counts: dict[str, int] = {}
     asr_ms: list[int] = []
+    engine_metric: set[str] = set()
     done = asyncio.Event()
 
     async with websockets.connect(f"{WS}/ws/session/{sid}", max_size=None) as ws:
@@ -40,8 +41,11 @@ async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool, auto: b
             async for raw in ws:
                 msg = json.loads(raw)
                 if msg["type"] == "events":
-                    if "asr_ms" in msg:
-                        asr_ms.append(msg["asr_ms"])
+                    # whisper path reports asr_ms; phoneme path reports infer_ms
+                    for k in ("asr_ms", "infer_ms"):
+                        if k in msg:
+                            asr_ms.append(msg[k])
+                            engine_metric.add(k)
                     for e in msg["events"]:
                         key = f"{e['type']}/{e['state']}"
                         counts[key] = counts.get(key, 0) + 1
@@ -69,8 +73,11 @@ async def run(wav_path: str, surah_id: int, start_ayah: int, fast: bool, auto: b
     s = httpx.get(f"{API}/api/sessions/{sid}/summary").json()
     print("\nevent counts:", json.dumps(counts, indent=2))
     if asr_ms:
-        asr_sorted = sorted(asr_ms)
-        print(f"asr latency ms: median={asr_sorted[len(asr_sorted)//2]} p95={asr_sorted[int(len(asr_sorted)*0.95)]}")
+        a = sorted(asr_ms)
+        label = "/".join(sorted(engine_metric)) or "asr_ms"
+        p95 = a[min(int(len(a) * 0.95), len(a) - 1)]
+        print(f"inference latency ({label}) n={len(a)} ms: "
+              f"p50={a[len(a) // 2]} p95={p95} max={a[-1]}")
     print("summary:", json.dumps(s["summary"], ensure_ascii=False))
     return counts
 

@@ -11,6 +11,7 @@ The hard cap is what keeps a fluent 60s breath-group from becoming one giant
 laggy transcription. Silence cuts double as the "wait and listen" pause signal.
 """
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,6 +60,11 @@ class Segment:
     starts_with_overlap: bool  # True = begins with audio re-played from a forced cut
                                # -> detector must dedup leading duplicate words
     duration: float
+    closed_reason: str = "silence"  # why the window closed (P1-7 instrumentation):
+                                    #   silence   - natural trailing-silence cut
+                                    #   max_smart - hit the cap, sliced at a quiet point
+                                    #   max_hard  - hit the cap mid-speech, overlap carried
+                                    #   flush     - session end
 
 
 class StreamSegmenter:
@@ -110,7 +116,8 @@ class StreamSegmenter:
     def flush(self) -> Segment | None:
         """End of stream: emit whatever speech remains."""
         if self._had_speech and len(self._buf) > 0:
-            return self._cut(forced=False)
+            seg = self._cut(forced=False)
+            return dataclasses.replace(seg, closed_reason="flush")
         self._buf = np.zeros(0, dtype=np.float32)
         return None
 
@@ -133,6 +140,7 @@ class StreamSegmenter:
             audio=self._buf[:cut_at],
             starts_with_overlap=self._starts_with_overlap,
             duration=cut_at / settings.sample_rate,
+            closed_reason=("max_smart" if smart else "max_hard") if forced else "silence",
         )
         if forced:
             if smart:

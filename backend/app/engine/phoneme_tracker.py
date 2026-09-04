@@ -38,6 +38,9 @@ class PhonemeTracker:
     _recited: set[int] = field(default_factory=set)  # ref indices confirmed recited
     _jump_cand: tuple[int, dict] | None = None
     _jump_segments: int = 0
+    # Per-window diagnostics for P1-7 instrumentation. Written by every feed();
+    # read by the session layer for logging. Never influences matching.
+    last_diag: dict = field(default_factory=dict)
     _jump_prov: Event | None = None
 
     # ---- tuning (conservative) ----
@@ -57,10 +60,14 @@ class PhonemeTracker:
         missed.
         """
         events: list[Event] = []
+        self.last_diag = {"n_ids": len(window_ids), "pointer": self.pointer}
         if len(window_ids) < 4:
+            self.last_diag["outcome"] = "too_short"
             return events
 
         chain = self._chain(window_ids)
+        self.last_diag["chain_len"] = len(chain)
+        self.last_diag["matched_ayahs"] = [self.ref[i].number for i in chain]
         if chain:
             self._clear_jump(events)
             matched = {i for i in chain}
@@ -80,9 +87,11 @@ class PhonemeTracker:
             self.pointer = last + 1
             cur = self.ref[min(self.pointer, len(self.ref) - 1)]
             events.append(Event(EventType.POSITION, EventState.CONFIRMED, cur.word_refs[0]))
+            self.last_diag["outcome"] = "chained"
             return events
 
         # Nothing in the local band aligned → consult global index for a jump
+        self.last_diag["outcome"] = "no_match"
         self._check_jump(window_ids, events)
         return events
 
@@ -106,6 +115,8 @@ class PhonemeTracker:
         hi = min(len(self.ref), self.pointer + 12)
         best: list[int] = []
         best_cer = 1.0
+        probe_best = 1.0          # closest single-ayah CER seen anywhere in the band
+        probe_ayah = None
         for s in range(lo, hi):
             chain: list[int] = []
             cursor, misses, total = 0, 0, 0.0
@@ -113,6 +124,8 @@ class PhonemeTracker:
                 if len(window) - cursor < 4:
                     break
                 cer, _st, e = self._best_span(window[cursor:], self.ref[i].ids)
+                if cer < probe_best:
+                    probe_best, probe_ayah = cer, self.ref[i].number
                 if cer <= self.MATCH_CER_MAX:
                     chain.append(i)
                     total += cer
@@ -129,6 +142,12 @@ class PhonemeTracker:
             mean = total / len(chain)
             if len(chain) > len(best) or (len(chain) == len(best) and mean < best_cer):
                 best, best_cer = chain, mean
+        self.last_diag.update(
+            chain_mean_cer=round(best_cer, 3) if best else None,
+            closest_cer=round(probe_best, 3),
+            closest_ayah=probe_ayah,
+            cer_max=self.MATCH_CER_MAX,
+        )
         return best
 
     def _best_span(self, window: list[int], ref_ids: list[int]) -> tuple[float, int, int]:

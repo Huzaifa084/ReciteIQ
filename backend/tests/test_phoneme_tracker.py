@@ -133,3 +133,39 @@ def test_multi_ayah_window_still_flags_a_real_skip(ref78):
     ev = tr.feed(window)
     missed = types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)
     assert len(missed) == 1 and missed[0].payload["ayah"] == ref78[2].number
+
+
+# ---- P1-7 instrumentation -------------------------------------------------
+
+def test_diag_reports_chain_on_match(ref78):
+    """feed() must record per-window diagnostics for the session layer to log."""
+    tr = PhonemeTracker(ref=ref78)
+    window = [i for a in ref78[:3] for i in a.ids]
+    tr.feed(window)
+    d = tr.last_diag
+    assert d["outcome"] == "chained"
+    assert d["chain_len"] == 3
+    assert d["matched_ayahs"] == [a.number for a in ref78[:3]]
+    assert d["n_ids"] == len(window)
+    assert 0.0 <= d["chain_mean_cer"] <= 1.0
+
+
+def test_diag_reports_closest_cer_on_no_match(ref78):
+    """A no-match must be diagnosable: record how close the best candidate got,
+    otherwise a failed window leaves no trace to tune against."""
+    import random
+    tr = PhonemeTracker(ref=ref78)
+    rng = random.Random(7)
+    tr.feed([rng.randint(1, 38) for _ in range(40)])
+    d = tr.last_diag
+    assert d["outcome"] == "no_match"
+    assert d["chain_len"] == 0 and d["chain_mean_cer"] is None
+    # the closest miss is recorded, and it is genuinely a miss
+    assert d["closest_cer"] > d["cer_max"]
+    assert d["closest_ayah"] is not None
+
+
+def test_diag_flags_too_short_window(ref78):
+    tr = PhonemeTracker(ref=ref78)
+    assert tr.feed([1, 2]) == []
+    assert tr.last_diag["outcome"] == "too_short"

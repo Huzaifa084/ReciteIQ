@@ -154,16 +154,28 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
 
             if (data := msg.get("bytes")) is not None:
                 for s in seg.feed(data):
+                    _t0 = time.perf_counter()
                     ids = model.ids(s.audio)
+                    infer_ms = int((time.perf_counter() - _t0) * 1000)
+                    win = {
+                        "session": session_id,
+                        "window_sec": round(s.duration, 2),
+                        "closed": s.closed_reason,
+                        "infer_ms": infer_ms,
+                        "n_ids": len(ids),
+                        "c_ctc": None,          # populated by P0-3
+                    }
                     if len(ids) < 4:
+                        log.info("phoneme window %s", {**win, "outcome": "too_few_ids"})
                         continue
                     if tracker is None:  # auto-detect
                         pending.append(ids)
                         loc = detector.feed(ids)
                         if loc is None:
-                            log.info("phoneme detect miss session=%s n_ids=%d top=%s",
-                                     session_id, len(ids),
-                                     [(h[1], h[2], round(h[3], 2)) for h in detector.last_hits])
+                            log.info("phoneme window %s", {
+                                **win, "outcome": "detecting",
+                                "top": [(h[1], h[2], round(h[3], 2)) for h in detector.last_hits],
+                            })
                             await ws.send_json({"type": "detecting"})
                             continue
                         d_surah, d_ayah, d_score = loc
@@ -175,7 +187,10 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         if tracker is None:
                             await ws.send_json({"type": "detecting"})
                             continue
-                        log.info("phoneme detect lock session=%s -> %s:%s", session_id, d_surah, start)
+                        log.info("phoneme window %s", {
+                            **win, "outcome": "detect_lock",
+                            "locked": f"{d_surah}:{start}", "score": d_score,
+                        })
                         await ws.send_json({"type": "detected", "surah": d_surah, "ayah": start, "score": d_score})
                         # replay all windows buffered during detection so nothing is lost
                         replay: list = []
@@ -188,17 +203,34 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         continue
                     events = tracker.feed(ids)
                     tally(events)
+                    log.info("phoneme window %s", {**win, **tracker.last_diag})
                     if events:
-                        await ws.send_json({"type": "events", "events": [e.to_dict() for e in events]})
+                        await ws.send_json({
+                            "type": "events",
+                            "events": [e.to_dict() for e in events],
+                            "infer_ms": infer_ms,
+                        })
 
             elif (text := msg.get("text")) is not None:
                 ctl = json.loads(text)
                 if ctl.get("type") == "end":
                     if (s := seg.flush()) is not None and tracker is not None:
-                        ev = tracker.feed(model.ids(s.audio))
+                        _t0 = time.perf_counter()
+                        _ids = model.ids(s.audio)
+                        _ms = int((time.perf_counter() - _t0) * 1000)
+                        ev = tracker.feed(_ids)
                         tally(ev)
+                        log.info("phoneme window %s", {
+                            "session": session_id, "window_sec": round(s.duration, 2),
+                            "closed": s.closed_reason, "infer_ms": _ms,
+                            "n_ids": len(_ids), "c_ctc": None, **tracker.last_diag,
+                        })
                         if ev:
-                            await ws.send_json({"type": "events", "events": [e.to_dict() for e in ev]})
+                            await ws.send_json({
+                                "type": "events",
+                                "events": [e.to_dict() for e in ev],
+                                "infer_ms": _ms,
+                            })
                     await ws.send_json({"type": "ended", "reason": "user"})
                     break
     except WebSocketDisconnect:

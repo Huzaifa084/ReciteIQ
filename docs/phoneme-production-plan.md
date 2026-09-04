@@ -658,6 +658,17 @@ Keep this run small and clearly labelled `M0-pre` in the results: same speakers,
 same clips, same surahs, no corpus-wide effort. It is a diagnostic delta, not a
 reportable result.
 
+> **`M0-pre` must be captured through the BROWSER, not through `ws_client`.**
+> `scripts/ws_client.py` reads a 16 kHz WAV and sends the PCM straight to the
+> WebSocket — it never touches `frontend/src/audio/recorder.ts`. So file-fed eval
+> clips are **structurally incapable** of showing the resampler effect: the 1.56%
+> sample loss and aliasing only occur on live `getUserMedia` capture. The `M0-pre`
+> vs post-P1-8 delta therefore requires the **same human reciting the same surahs
+> into the live SPA** before and after, with per-window diagnostics read from the
+> backend log. File-fed runs remain valuable for the tracker and latency baseline
+> (`M0`), and as the invariant regression check — but they measure the server
+> side only.
+
 **The formal baseline (`M0`)** is then measured after P1-7 **and** P1-8, on the
 recorded corpus: every §5.2 metric on the calibration + validation splits with
 today's tracker (including the already-landed one-ayah-per-window fix). **No
