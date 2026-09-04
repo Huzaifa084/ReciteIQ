@@ -38,6 +38,10 @@ export function Recite({
   )
   const [detectedSurah, setDetectedSurah] = useState<number | null>(auto ? null : surahId)
   const [noMatchRun, setNoMatchRun] = useState(0)   // P0-4: consecutive unplaced windows
+  // Seconds of speech held in the window the server has not closed yet. With a
+  // 25s window this is the only sign of life for up to ~28s, and for a short
+  // surah for the whole recitation — without it the app reads as broken.
+  const [heard, setHeard] = useState(0)
   const [error, setError] = useState('')
   const sockRef = useRef<SessionSocket | null>(null)
   const recRef = useRef<Recorder | null>(null)
@@ -68,8 +72,10 @@ export function Recite({
           onEvents: (events) => {
             setState((prev) => applyEvents(prev, events))
             setNoMatchRun(0)      // anything placed clears the warning
+            setHeard(0)           // the window closed; the pending count is stale
           },
           onNoMatch: (info) => setNoMatchRun(info.run || 1),
+          onBuffering: (info) => setHeard(info.bufferedSec),
           onDetected: (surah, ayah) => {
             setDetectedSurah(surah)
             api.surahText(surah, ayah).then((t) => {
@@ -135,6 +141,8 @@ export function Recite({
   const pillText =
     status === 'live' && noMatchRun >= 2
       ? "can't place you"
+      : status === 'live' && heard >= 3
+      ? `hearing you · ${Math.round(heard)}s`
       : status === 'live'
       ? 'listening'
       : status === 'detecting'

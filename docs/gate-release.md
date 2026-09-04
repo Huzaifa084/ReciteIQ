@@ -13,6 +13,34 @@ costing a ten-minute transcription round.
 
 ## Result
 
+Four segmentations measured. Overall pass counts do not separate 15s from 25s,
+so the choice is made on the two columns that do — false errors and how long the
+reciter waits to see anything.
+
+| window | clean ayahs | false MISSED_WORD | error cases | overall | first feedback (median / worst) |
+|---|---|---|---|---|---|
+| 5 s | 68/74 | 5 | 7/9 | 10/15 | 4.8 s / 5.8 s |
+| 10 s | 69/74 | 4 | 6/9 | 8/15 | 8.7 s / 11.5 s |
+| 15 s | 70/74 | 2 | 7/9 | **11/15** | 16.8 s / 17.3 s |
+| **25 s (shipped)** | **71/74** | **0** | **8/9** | **11/15** | 28.7 s / 28.8 s |
+
+**Latency was invisible to this gate until a live run measured it.** The gate
+replays cached transcripts, so every segment arrives instantly; only the
+staging concurrency run, which measures wall-clock time to the first event,
+showed 27.5 s and 30.9 s. For Al-Kafirun the entire 23 s surah is ONE window, so
+nothing changes on screen until the reciter stops.
+
+25 s is shipped because a false accusation is the failure mode that destroys
+trust in a Sami — it is what made the original app feel broken — and 25 s is the
+only setting with none. The latency it costs is mitigated rather than accepted:
+the server now sends a `buffering` frame at most once a second while a window
+fills, so the UI can show that audio is being heard without inventing a verdict
+for it. The principled fix, if the wait still reads badly to real users, is to
+decode a partial window for provisional display while the complete window stays
+authoritative for verdicts.
+
+## Result (detail)
+
 | segmentation | clean ayahs | false MISSED_WORD / AYAH / jump | error cases | overall |
 |---|---|---|---|---|
 | 5 s (Whisper default) | 68/74 (91.9%) | **5** / 0 / 0 | 7/9 | 10/15 |

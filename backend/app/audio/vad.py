@@ -126,6 +126,18 @@ class StreamSegmenter:
         return None
 
     @property
+    def buffered_sec(self) -> float:
+        """Speech held in the current, not-yet-closed window.
+
+        With a 25s window the SPA receives nothing at all until the window
+        closes — measured 28s to first feedback, and for a short surah the whole
+        recitation is one window, so the screen never changes until the reciter
+        stops. This lets the UI show that audio is being heard without inventing
+        a verdict for it.
+        """
+        return len(self._buf) / settings.sample_rate
+
+    @property
     def in_silence(self) -> bool:
         return not self._speech_active
 

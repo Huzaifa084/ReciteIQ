@@ -14,6 +14,8 @@ export interface WSCallbacks {
   onDetected?: (surah: number, ayah: number) => void
   /** Backend heard audio but could not place it (P0-4). */
   onNoMatch?: (info: { c_ctc: number | null; closest_cer: number | null; run: number }) => void
+  /** Audio is being heard but the window has not closed yet — no verdict implied. */
+  onBuffering?: (info: { bufferedSec: number; inSilence: boolean }) => void
 }
 
 export class SessionSocket {
@@ -61,6 +63,8 @@ export class SessionSocket {
         this.cb.onEvents(msg.events)
       } else if (msg.type === 'detected') {
         this.cb.onDetected?.(msg.surah, msg.ayah)
+      } else if (msg.type === 'buffering') {
+        this.cb.onBuffering?.({ bufferedSec: msg.buffered_sec ?? 0, inSilence: !!msg.in_silence })
       } else if (msg.type === 'no_match') {
         this.cb.onNoMatch?.({ c_ctc: msg.c_ctc ?? null, closest_cer: msg.closest_cer ?? null, run: msg.run ?? 1 })
       } else if (msg.type === 'ended') {

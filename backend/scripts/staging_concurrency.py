@@ -25,7 +25,8 @@ lock = threading.Lock()
 
 
 def run_one(tag: str):
-    out = {"tag": tag, "events": 0, "ayahs": set(), "rejected": None, "error": None}
+    out = {"tag": tag, "events": 0, "ayahs": set(), "rejected": None, "error": None,
+           "ttf": None}
     try:
         sid = requests.post(f"{base}/api/sessions",
                             json={"surah_id": surah, "start_ayah": 1},
@@ -33,6 +34,16 @@ def run_one(tag: str):
         ws_url = base.replace("http://", "ws://") + f"/ws/session/{sid}"
         t0 = time.perf_counter()
         with connect(ws_url, open_timeout=30, max_size=None) as ws:
+            # Admission control answers immediately; read it before streaming or
+            # the close arrives later as a bare ConnectionClosedError and a
+            # correctly shed session looks like a crash.
+            try:
+                first = json.loads(ws.recv(timeout=2))
+                if first.get("type") == "rejected":
+                    out["rejected"] = first.get("reason")
+                    return
+            except TimeoutError:
+                pass
             for i in range(0, len(pcm), 3200):
                 ws.send(pcm[i:i + 3200])
                 target = t0 + (i + 3200) / 2 / 16000 / 1.05
@@ -42,13 +53,31 @@ def run_one(tag: str):
                     except TimeoutError:
                         break
                     if m.get("type") == "events":
+                        if out["ttf"] is None and any(e["type"] == "WORD_OK"
+                                                      for e in m["events"]):
+                            out["ttf"] = round(time.perf_counter() - t0, 1)
                         out["events"] += len(m["events"])
                         out["ayahs"] |= {e["payload"]["ayah"] for e in m["events"]
                                          if e["type"] == "WORD_OK"}
                     elif m.get("type") == "rejected":
                         out["rejected"] = m.get("reason")
                         return
+            # Wait for the flush segment. With 25s windows a short surah produces
+            # NO events until the session ends, so cutting the socket here scored
+            # a perfectly good session as zero.
             ws.send(json.dumps({"type": "end"}))
+            deadline = time.perf_counter() + 90
+            while time.perf_counter() < deadline:
+                try:
+                    m = json.loads(ws.recv(timeout=deadline - time.perf_counter()))
+                except Exception:
+                    break
+                if m.get("type") == "events":
+                    out["events"] += len(m["events"])
+                    out["ayahs"] |= {e["payload"]["ayah"] for e in m["events"]
+                                     if e["type"] == "WORD_OK"}
+                elif m.get("type") == "ended":
+                    break
         requests.post(f"{base}/api/sessions/{sid}/end", timeout=30)
     except Exception as e:                     # noqa: BLE001 - reported, not swallowed
         out["error"] = f"{type(e).__name__}: {e}"
@@ -89,7 +118,7 @@ wall = time.perf_counter() - t0
 print(f"\n{n} concurrent sessions, {dur:.0f}s clip each, wall {wall:.0f}s")
 for r in sorted(results, key=lambda x: x["tag"]):
     print(f"  {r['tag']}: events={r['events']} ayahs={r['ayahs']} "
-          f"rejected={r['rejected']} error={r['error']}")
+          f"first_feedback={r['ttf']}s rejected={r['rejected']} error={r['error']}")
 print(f"memory samples: {len(peak)}  peak={max(peak, default='?')}")
 
 ok = [r for r in results if r["error"] is None and r["rejected"] is None]

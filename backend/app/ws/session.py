@@ -101,6 +101,7 @@ class LiveSession:
                        "repeats": 0, "uncertain": 0}
         self.no_match_run = 0        # consecutive windows we heard but could not place
         self._ok_idx: set[int] = set()   # distinct reference words confirmed
+        self.last_heard = 0.0            # throttle for the "we can hear you" frame
         self.detail: list[dict] = []
 
     def _init_tracker(self, surah_id: int, start_ayah: int, *, preamble: bool) -> None:
@@ -272,7 +273,23 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                     await ws.send_json({"type": "ended", "reason": "rate limit"})
                     finalize = True
                     break
-                for seg in live.segmenter.feed(data):
+                closed = live.segmenter.feed(data)
+                if not closed:
+                    # Nothing to report yet. With a 25s window that silence lasts
+                    # up to ~28s, and for a short surah the whole recitation fits
+                    # in one window — the screen never changes and the app reads
+                    # as broken. Say that we can hear them, at most once a second,
+                    # WITHOUT inventing a verdict: this frame carries no events.
+                    buffered = live.segmenter.buffered_sec
+                    now = time.monotonic()
+                    if buffered > 0 and now - live.last_heard >= 1.0:
+                        live.last_heard = now
+                        await ws.send_json({
+                            "type": "buffering",
+                            "buffered_sec": round(buffered, 1),
+                            "in_silence": live.segmenter.in_silence,
+                        })
+                for seg in closed:
                     tr = await engine.transcribe(seg.audio, seg.duration)
                     if tr.gated:
                         continue
