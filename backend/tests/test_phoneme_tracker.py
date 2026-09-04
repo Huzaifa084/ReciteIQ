@@ -110,3 +110,26 @@ def test_conservative_jump(db, ref78):
     ev += tr.feed(ikhlas[0].ids)     # second window confirms
     conf = types(ev, EventType.MUTASHABEH_JUMP, EventState.CONFIRMED)
     assert conf and conf[0].payload["dest_surah"] == 112
+
+
+def test_multi_ayah_window_credits_every_covered_ayah(ref78):
+    """A window is bounded by time, not by ayah, so continuous recitation puts
+    several consecutive ayahs in ONE window. Every covered ayah must be credited
+    — crediting only the best-matching one made clean recitation report the rest
+    as MISSED_AYAH (seen live on a full Al-Fatihah clip: ayahs 3, 4, 5 flagged).
+    """
+    tr = PhonemeTracker(ref=ref78)
+    window = [i for a in ref78[:4] for i in a.ids]      # 4 ayahs, one window
+    ev = tr.feed(window)
+    assert not types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)
+    assert tr.pointer >= 4
+
+
+def test_multi_ayah_window_still_flags_a_real_skip(ref78):
+    """The multi-ayah fix must not blind the tracker to a genuine skip: recite
+    ayahs 1,2,4 in one window and ayah 3 is still reported missed."""
+    tr = PhonemeTracker(ref=ref78)
+    window = ref78[0].ids + ref78[1].ids + ref78[3].ids   # ayah 3 skipped
+    ev = tr.feed(window)
+    missed = types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)
+    assert len(missed) == 1 and missed[0].payload["ayah"] == ref78[2].number

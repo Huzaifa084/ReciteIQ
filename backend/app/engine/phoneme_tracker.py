@@ -44,58 +44,112 @@ class PhonemeTracker:
     MATCH_CER_MAX = 0.45          # window must align to an ayah at least this well to count
     JUMP_MARGIN = 0.25            # distant ayah must beat local by this (score) to be a jump
     JUMP_CONFIRM = 2              # consecutive windows before confirming a jump
+    CHAIN_MAX = 12                # max ayahs one window may cover
+    CHAIN_SKIP_MAX = 2            # unmatched refs tolerated inside a chain
 
     def feed(self, window_ids: list[int]) -> list[Event]:
-        """Process one ≤30s window's collapsed token IDs."""
+        """Process one ≤30s window's collapsed token IDs.
+
+        A window is bounded by time, not by ayah, so it routinely spans SEVERAL
+        consecutive ayahs. We therefore chain-align consecutive references onto
+        successive spans of the window and credit every ayah the window actually
+        covered — only the ayahs the reciter genuinely skipped over are reported
+        missed.
+        """
         events: list[Event] = []
         if len(window_ids) < 4:
             return events
 
-        # Best-matching ayah in a LOCAL band around the pointer. Backward reach (−3)
-        # catches repeats/restarts; forward reach (+4) catches skips.
-        lo = max(0, self.pointer - 3)
-        hi = min(len(self.ref), self.pointer + 4)
-        local_best, local_cer = None, 1.0
-        for i in range(lo, hi):
-            cer = self._cover_cer(window_ids, self.ref[i].ids)
-            if cer < local_cer:
-                local_cer, local_best = cer, i
-
-        if local_best is not None and local_cer <= self.MATCH_CER_MAX:
+        chain = self._chain(window_ids)
+        if chain:
             self._clear_jump(events)
-            if local_best < self.pointer:
+            matched = {i for i in chain}
+            first, last = chain[0], chain[-1]
+            if first < self.pointer:
                 events.append(Event(EventType.REPEAT, EventState.CONFIRMED,
-                                    {**self.ref[local_best].word_refs[0], "from_idx": self.pointer}))
-            elif local_best > self.pointer:
-                # ayahs strictly between pointer and local_best were skipped
-                for k in range(self.pointer, local_best):
-                    if k not in self._recited:
-                        a = self.ref[k]
-                        events.append(Event(EventType.MISSED_AYAH, EventState.CONFIRMED,
-                                            {"surah": a.surah, "ayah": a.number, "ayah_id": a.ayah_id}))
-            self._confirm_ayah(local_best, events)
-            self.pointer = local_best + 1
+                                    {**self.ref[first].word_refs[0], "from_idx": self.pointer}))
+            # Skipped = inside the covered span but never aligned (leading gap
+            # before the first match, or a hole between two matches).
+            for k in range(self.pointer, last):
+                if k not in matched and k not in self._recited:
+                    a = self.ref[k]
+                    events.append(Event(EventType.MISSED_AYAH, EventState.CONFIRMED,
+                                        {"surah": a.surah, "ayah": a.number, "ayah_id": a.ayah_id}))
+            for i in chain:
+                self._confirm_ayah(i, events)
+            self.pointer = last + 1
             cur = self.ref[min(self.pointer, len(self.ref) - 1)]
             events.append(Event(EventType.POSITION, EventState.CONFIRMED, cur.word_refs[0]))
             return events
 
-        # Local match failed → consult global index for a conservative jump
+        # Nothing in the local band aligned → consult global index for a jump
         self._check_jump(window_ids, events)
         return events
 
     # ---------------------------------------------------------------- internals
 
-    def _cover_cer(self, window: list[int], ref_ids: list[int]) -> float:
-        """How well the reference ayah is covered by the window. If the window is
-        much longer (covers several ayahs), score the best ref-length sub-span."""
-        if not ref_ids:
-            return 1.0
+    def _chain(self, window: list[int]) -> list[int]:
+        """Align a run of consecutive references onto successive spans of `window`.
+
+        Returns the matched reference indices in recitation order. A window is
+        bounded by time, so it usually holds several ayahs; a purely greedy scan
+        from the band start derails when an early reference matches spuriously and
+        eats part of the window. So we ANCHOR: try every start in the band, extend
+        each candidate as far as it will go, and keep the longest chain (lowest
+        mean CER breaks ties). The anchor itself must match, which is what keeps
+        noise from producing a chain at all.
+
+        Backward reach (-3) catches repeats/restarts; the forward reach is wide
+        because one bounded window can hold many short ayahs.
+        """
+        lo = max(0, self.pointer - 3)
+        hi = min(len(self.ref), self.pointer + 12)
+        best: list[int] = []
+        best_cer = 1.0
+        for s in range(lo, hi):
+            chain: list[int] = []
+            cursor, misses, total = 0, 0, 0.0
+            for i in range(s, min(len(self.ref), s + self.CHAIN_MAX)):
+                if len(window) - cursor < 4:
+                    break
+                cer, _st, e = self._best_span(window[cursor:], self.ref[i].ids)
+                if cer <= self.MATCH_CER_MAX:
+                    chain.append(i)
+                    total += cer
+                    cursor += e
+                    misses = 0
+                    continue
+                if not chain:
+                    break                    # anchor must match — no chain from here
+                misses += 1
+                if misses > self.CHAIN_SKIP_MAX:
+                    break                    # too much unmatched: stop extending
+            if not chain:
+                continue
+            mean = total / len(chain)
+            if len(chain) > len(best) or (len(chain) == len(best) and mean < best_cer):
+                best, best_cer = chain, mean
+        return best
+
+    def _best_span(self, window: list[int], ref_ids: list[int]) -> tuple[float, int, int]:
+        """Best-matching contiguous span of `window` for one ayah reference.
+
+        Returns (cer, start, end). Span length is scanned around the reference
+        length because recitation tempo (and so ID count) varies by reciter.
+        """
+        if not ref_ids or not window:
+            return 1.0, 0, 0
         L = len(ref_ids)
-        if len(window) <= L * 1.4:
-            return Levenshtein.normalized_distance(window, ref_ids)
-        best = 1.0
-        for start in range(0, len(window) - L + 1, max(1, L // 3)):
-            best = min(best, Levenshtein.normalized_distance(window[start:start + L], ref_ids))
+        best = (1.0, 0, 0)
+        lengths = sorted({max(1, int(L * f)) for f in (0.75, 0.9, 1.0, 1.15, 1.35)})
+        stride = max(1, L // 4)
+        for ln in lengths:
+            if ln > len(window):
+                continue
+            for start in range(0, len(window) - ln + 1, stride):
+                cer = Levenshtein.normalized_distance(window[start:start + ln], ref_ids)
+                if cer < best[0]:
+                    best = (cer, start, start + ln)
         return best
 
     def _confirm_ayah(self, i: int, events: list[Event]) -> None:

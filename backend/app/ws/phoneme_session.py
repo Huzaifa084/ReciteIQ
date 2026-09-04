@@ -36,30 +36,42 @@ class _Detector:
     a surah leading the recent windows — then lock at its best-scoring ayah.
     """
 
+    INSTANT_LOCK = 0.85   # one very-confident window locks immediately
+    VOTE_FLOOR = 0.35     # a window's top surah counts toward frequency consensus above this
+
     def __init__(self):
         self.index = get_phoneme_index()
-        self._votes: list[int] = []                       # surah per qualifying window
+        self._votes: list[int] = []                       # top surah per window (margin-free)
         self._min_ayah: dict[int, int] = {}               # surah -> earliest matched ayah
         self._best_score: dict[int, float] = {}
+        self.last_hits: list = []                         # diagnostics
 
     def feed(self, ids: list[int]) -> tuple[int, int, float] | None:
         if len(ids) < settings.phoneme_detect_min_ids:
             return None
         hits = self.index.vote(ids)
+        self.last_hits = hits[:3]
         if not hits:
             return None
         _aid, surah, ayah, score = hits[0]
-        # margin vs the best hit at a DIFFERENT surah (same-surah ayah ties don't count)
-        other = next((h[3] for h in hits[1:] if h[1] != surah), 0.0)
-        if score < settings.phoneme_detect_score_min or score - other < settings.phoneme_detect_margin:
-            return None  # uncertain → keep listening
-        self._votes.append(surah)
-        self._votes = self._votes[-5:]
+        if score < self.VOTE_FLOOR:
+            return None  # nothing matched well enough to even vote
+
         self._min_ayah[surah] = min(self._min_ayah.get(surah, ayah), ayah)
         self._best_score[surah] = max(self._best_score.get(surah, 0.0), score)
+
+        # Path 1 — instant lock on a single high-confidence, unambiguous window
+        other = next((h[3] for h in hits[1:] if h[1] != surah), 0.0)
+        if score >= self.INSTANT_LOCK and score - other >= settings.phoneme_detect_margin:
+            return (surah, self._min_ayah[surah], round(score, 3))
+
+        # Path 2 — frequency consensus: count top-surah across windows (margin-free),
+        # so a surah that keeps leading locks even when single-window margins are weak
+        # (live-caught on Taha: surah 20 led 2 windows but no window passed the margin).
+        self._votes.append(surah)
+        self._votes = self._votes[-5:]
         lead = max(set(self._votes), key=self._votes.count)
         if self._votes.count(lead) >= settings.phoneme_detect_consensus:
-            # lock at the EARLIEST matched ayah (reciter's start), not the best-scoring one
             return (lead, self._min_ayah[lead], round(self._best_score[lead], 3))
         return None
 
@@ -149,6 +161,9 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         pending.append(ids)
                         loc = detector.feed(ids)
                         if loc is None:
+                            log.info("phoneme detect miss session=%s n_ids=%d top=%s",
+                                     session_id, len(ids),
+                                     [(h[1], h[2], round(h[3], 2)) for h in detector.last_hits])
                             await ws.send_json({"type": "detecting"})
                             continue
                         d_surah, d_ayah, d_score = loc
