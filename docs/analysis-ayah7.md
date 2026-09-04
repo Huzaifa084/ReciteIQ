@@ -72,3 +72,31 @@ The per-window logs for these six sessions were lost when the backend container
 was recreated. The analysis above rests on the reference data, the code path, and
 figures already transcribed into the experiment docs — but per-session diagnostics
 should be persisted outside `docker logs` before the next round of measurement.
+
+
+---
+
+## Fix implemented and measured (2026-09-04)
+
+`coverage()` + `phoneme_partial_coverage` (default off). A/B with the reference
+strategy and every other flag held fixed:
+
+| fixture | condition | no_match | credited | partial | meanCER |
+|---|---|---|---|---|---|
+| **real `.ogg`** | baseline | 1 | **7/7** | 0 | 0.212 |
+| | partial | 1 | **7/7** | 0 | 0.212 |
+| | partial+carry | 1 | **7/7** | 0 | 0.212 |
+| **frag 4.0s** | baseline | 5 | 6/7 | 0 | 0.267 |
+| | **partial** | **2** | 6/7 | **3** | 0.267 |
+| | carry | 4 | **7/7** | 0 | 0.267 |
+| | **partial+carry** | **3** | **7/7** | **1** | 0.267 |
+
+**No cost on clean audio** — all four conditions are identical on the real
+recording. On fragmented audio partial coverage converts three dead `no_match`
+windows into recognised *partial* matches, so the reciter is understood to be
+mid-ayah instead of unplaceable (which is what drives the "can't place you"
+banner).
+
+Partial alone does not raise credited ayahs — completing an ayah still needs
+enough of it, which is what carry supplies. The two are complementary:
+`partial+carry` gives 7/7 with the fewest dead windows.
