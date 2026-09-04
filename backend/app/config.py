@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     # Phoneme/encoder-CTC recognizer (v1 ID-space tracker)
     phoneme_model_path: str = "models/quran-phoneme-ctc-small-v2.pt"
     tracker_mode: str = "whisper"              # "whisper" (current) | "phoneme" (v1 ID tracker)
+    # P1-9: run the encoder over only the frames that carry audio, instead of
+    # padding every window to 30s (which cost a flat ~4s regardless of length).
+    # Not a pure optimisation in principle — the encoder is bidirectional, so
+    # dropping the padding changes what each frame attends over — but measured
+    # on real recitation the output is IDENTICAL at 3s and 5s (CER 0.000) and
+    # diverges by only 0.018 at 10-22s, far below match_cer_max. Latency:
+    # 3s window 4117ms -> 449ms (9.2x), 5s 4041ms -> 741ms (5.5x).
+    # Set false to fall back to the padded path (e.g. to A/B a reference rebuild).
+    phoneme_variable_length: bool = True
     phoneme_segment_max_sec: float = 25.0      # ≤30s bounded windows (no stitcher in v1)
     phoneme_silence_cut_sec: float = 0.5       # cut at natural pauses (ayah boundaries)
     phoneme_detect_min_ids: int = 6            # min query IDs before auto-detect votes

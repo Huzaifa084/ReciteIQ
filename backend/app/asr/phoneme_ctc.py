@@ -49,16 +49,48 @@ class PhonemeCTC:
                                            chunk_length=30, n_fft=400)
         self._lock = threading.Lock()  # one shared model; serialize forward passes
 
+    def _encode(self, feats: torch.Tensor) -> torch.Tensor:
+        """Encoder forward over ONLY the frames that carry audio (P1-9).
+
+        `WhisperEncoder.forward` hard-requires exactly 3000 mel frames and adds
+        all 1500 positional embeddings, so a shorter input cannot be passed to it.
+        We therefore drive the encoder's own submodules and slice the positions to
+        match — same weights, same maths, just fewer time steps. Measured before
+        this: a 5s window cost the same ~4s as a 22s one, because every window was
+        padded to 30s (see docs/baseline-m0-pre-serverside.md).
+        """
+        enc = self._enc
+        x = torch.nn.functional.gelu(enc.conv1(feats))
+        x = torch.nn.functional.gelu(enc.conv2(x))
+        x = x.permute(0, 2, 1)                      # (1, n_out, d_model)
+        n = x.shape[1]
+        pos = enc.embed_positions.weight[:n]
+        if n > pos.shape[0]:                        # never expected; fail loudly
+            raise ValueError(f"encoder got {n} positions, model has {pos.shape[0]}")
+        x = x + pos
+        for layer in enc.layers:
+            x = layer(x, None)
+        return enc.layer_norm(x)
+
     def ids(self, audio: np.ndarray) -> list[int]:
         """float32 16k mono (≤30s) → collapsed token-ID sequence."""
         if len(audio) == 0:
             return []
         audio = audio[: _WIN_SAMPLES]  # v1: hard 30s cap
         feats = self._fe(audio, sampling_rate=_SR, return_tensors="pt").input_features
+        if settings.phoneme_variable_length:
+            # Trim the padded mel frames to the real audio, rounded UP to an even
+            # count so conv2's stride-2 downsampling lands exactly. 100 frames/sec.
+            n_mel = min(feats.shape[-1], int(np.ceil(len(audio) / _SR * 100)))
+            n_mel = max(2, n_mel + (n_mel % 2))
+            feats = feats[..., :n_mel]
         with self._lock, torch.no_grad():
-            h = self._enc(feats).last_hidden_state
+            h = self._encode(feats) if settings.phoneme_variable_length \
+                else self._enc(feats).last_hidden_state
             logits = h @ self._ctc_w.T + self._ctc_b
         raw = torch.argmax(logits, dim=-1)[0].tolist()
+        if settings.phoneme_variable_length:
+            return collapse(raw)          # already only real frames — nothing to trim
         n_real = max(1, round(len(audio) / _SR / 30 * len(raw)))
         return collapse(raw[:n_real])
 

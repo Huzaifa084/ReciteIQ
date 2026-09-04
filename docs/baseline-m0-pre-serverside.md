@@ -121,3 +121,50 @@ high-frequency content from a studio qari recording — sibilance, mic self-nois
 room tone, fan hum — and that folds differently. This test cannot settle that.
 Re-run the same A/B on real amateur takes once the corpus exists (plan §5.1); if
 amateur audio *is* sensitive, P1-8 climbs straight back up.
+
+---
+
+# P1-9 — variable-length encoder pass (2026-09-04)
+
+## The constant is removed
+
+Measured on real recitation (`fatiha_full.wav`, truncated to each duration),
+padded path vs sliced path:
+
+| window | padded_ids | sliced_ids | CER | padded | **sliced** | speedup |
+|---|---|---|---|---|---|---|
+| 3.0s | 25 | 25 | **0.000** | 4117 ms | **449 ms** | **9.2×** |
+| 5.0s | 26 | 26 | **0.000** | 4041 ms | **741 ms** | **5.5×** |
+| 10.0s | 55 | 54 | 0.018 | 4315 ms | 1281 ms | 3.4× |
+| 22.0s | 98 | 99 | 0.010 | 9833 ms* | 5953 ms | 1.7× |
+
+\* inflated by CPU contention; the same window measured 4081 ms in the single-session
+run above, so the true 22s speedup is smaller than the table implies.
+
+Inference now **scales with duration** instead of being flat. For the 3–6s windows
+that dominate ayah-by-ayah recitation, feedback latency drops from ~4.1s to
+**0.45–0.75s**, which moves the per-window floor from ≈4.6s to roughly
+**1.0–1.3s** (0.5s silence cut + sub-second inference).
+
+## Bit-identical where it matters — but NOT by construction
+
+**Exact equality is impossible in principle** and the plan's original acceptance
+criterion ("bit-identical output") was wrong. The Whisper encoder is
+**bidirectional**: with 30s padding, every real frame attends over the padded
+region as well, so removing the padding changes the representation by definition.
+It is a different function, not an off-by-one.
+
+Empirically it does not matter: **CER 0.000 at 3s and 5s** on real speech, and
+0.018 / 0.010 at 10s / 22s — two orders of magnitude below `MATCH_CER_MAX = 0.45`,
+and safe against the stored references even though those were built with the
+padded path.
+
+**A first attempt at the acceptance test asserted exact equality on synthetic
+tone+noise and failed at 3s and 25s.** That test was measuring noise: synthetic
+signals yielded only 6–8 tokens, where one differing token is a huge relative CER.
+Real recitation is the only valid fixture, and on it the same durations are
+identical. The test now asserts a CER budget (0.06) on real audio plus a measured
+speedup.
+
+`RECITEIQ_PHONEME_VARIABLE_LENGTH` defaults **true**, with the padded path retained
+for A/B against any future reference rebuild.
