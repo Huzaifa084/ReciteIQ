@@ -1,0 +1,52 @@
+# Staging candidate: the FastConformer + text pipeline, alongside production.
+#
+# Production is NOT touched by this file. The live stack keeps
+# RECITEIQ_ASR_ENGINE=whisper_local + RECITEIQ_TRACKER_MODE=phoneme from
+# deploy/.env, and the edge route for reciteiq.wiserhelpdesk.com still points at
+# the production `web` container. This one is loopback-only, so it can be
+# exercised end to end without being reachable from the internet.
+#
+#   up    docker compose -f docker-compose.staging.yml up -d
+#   logs  docker compose -f docker-compose.staging.yml logs -f backend-staging
+#   down  docker compose -f docker-compose.staging.yml down
+#
+# It shares the production database on purpose: the schema is identical, and a
+# staging run that cannot write a real session row proves less than one that can.
+# Sessions are per-row and anonymous, so they do not disturb live data.
+name: reciteiq-staging
+
+services:
+  backend-staging:
+    image: reciteiq-backend:fastconformer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:19844:8000"   # loopback-only: not routed by the edge
+    environment:
+      RECITEIQ_DATABASE_URL: postgresql+psycopg://reciteiq:reciteiq@db:5432/reciteiq
+      RECITEIQ_ALLOWED_ORIGINS: '["https://reciteiq.wiserhelpdesk.com","http://127.0.0.1:5173"]'
+      RECITEIQ_ASR_ENGINE: fastconformer
+      RECITEIQ_TRACKER_MODE: whisper
+      # segment_max_sec / silence_cut_sec are deliberately NOT set: the engine
+      # picks 25s / 0.5s, which is what the release gate measured. Setting them
+      # here would override that silently — see Settings._segmentation_follows_the_engine.
+      HF_HOME: /hf
+    volumes:
+      - ../backend/models:/app/models:ro
+      - reciteiq_hf:/hf          # keep the 1.2GB checkpoint across restarts
+    networks:
+      - default
+      - reciteiq_default         # reach the production db + run migrations
+    deploy:
+      resources:
+        limits:
+          memory: 2560m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  reciteiq_hf:
+
+networks:
+  reciteiq_default:
+    external: true
