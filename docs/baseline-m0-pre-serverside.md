@@ -168,3 +168,26 @@ speedup.
 
 `RECITEIQ_PHONEME_VARIABLE_LENGTH` defaults **true**, with the padded path retained
 for A/B against any future reference rebuild.
+
+## Benchmark rerun with P1-9 deployed
+
+Same clips, same harness, live socket:
+
+| Clip | words_ok | Errors | infer_ms p50 | p95 |
+|---|---|---|---|---|
+| `fatiha_full.wav` | **29/29** | **none** | **1423** (was 4081) | 2955 (was 4318) |
+| `fatiha_skip3.wav` | 27/27 | exactly 1 MISSED_AYAH on ayah 3 | **1566** | 2097 |
+
+Per-window on the skip run — every window sub-2.1s, none near the old flat ~4s:
+
+```
+ win_s     closed     ms  ids chain  meanCER      outcome  matched
+  5.09    silence    995   26     1    0.111      chained  [1]
+ 17.15    silence   2097   78     3    0.106      chained  [2, 4, 5]
+  5.66    silence    699   25     1    0.125      chained  [6]
+ 11.55    silence   1566   64     1    0.032      chained  [7]
+```
+
+Accuracy is unchanged and the §5.3 latency targets (P50 ≤ 1.5s, P95 ≤ 3.5s) are now
+met on a single session. **Concurrency remains unvalidated** — two overlapping
+sessions previously doubled latency against a configured cap of 3.

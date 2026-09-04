@@ -690,13 +690,35 @@ Two consequences worth stating plainly:
   is a direct input to P2-5 and to any window-size tuning, and it is only knowable
   because P1-7 measured it.
 
-**P1-9 removes the constant** (variable-length encoder pass). Targets are set only
-after that lands:
+**P1-9 has landed and removed the constant.** Re-measured on the live socket,
+same clip, `RECITEIQ_PHONEME_VARIABLE_LENGTH=true`:
 
-- **Per-window processing latency** — window close → UI update. Post-P1-9 target to
-  be set from measurement; the pre-P1-9 measured baseline is p50 4081 ms.
+| window_sec | infer_ms before | infer_ms after |
+|---|---|---|
+| 5.09 | 3927 | **1423** |
+| 5.95 | 4017 | **682** |
+| 21.95 | 4081 | **2955** |
+| p50 / p95 | 4081 / 4318 | **1423 / 2955** |
+
+Accuracy unchanged: 29/29 words, 0 errors on the clean clip. Cost now scales with
+duration, so the model becomes:
+
+```
+t_feedback = t_silence_cut (0.5s) + t_infer (~0.15 x window_sec) + t_net
+```
+
+giving ≈ **1.2s** for a typical 5s window and ≈ 3.5s for a 22s one.
+
+Targets, now that the architecture can support them:
+
+- **Per-window processing latency** — window close → UI update.
+  **P50 ≤ 1.5s, P95 ≤ 3.5s** (currently p50 1423 ms, p95 2955 ms — both met on a
+  single session; must be re-confirmed under concurrency, see below).
 - **Time-to-first-feedback** — utterance start → first green. Bounded below by the
   window length; report the distribution, do not reduce it to one number.
+- **Concurrency is unvalidated.** Two overlapping sessions previously doubled
+  latency (p50 8430 ms pre-P1-9) against a configured cap of 3. Re-measure
+  deliberately before any demo.
 
 Fully streaming sub-second feedback would need incremental partial CTC hypotheses —
 out of scope for v1, noted as future work.
@@ -779,7 +801,7 @@ frame; `UNCERTAIN` is a tracker decision.
 | 6 | **P0-2** pilot rebuild + drop the unstable exclusion | **P0** | Depends on 5; removes the ayah-1 penalty. |
 | 7 | **P0-3** CTC posterior confidence | **P0** | Ship with `k_conf = 0` until fitted. Heuristic, not calibration. |
 | 8 | **P0-4** `no_match` + `UNCERTAIN` | **P0** | Needs 7 for `c_ctc`; makes failures visible. → **M1** |
-| 9 | **P1-9** variable-length encoder pass | **P1** | Measured: inference is a flat ~4.1s regardless of window length (§5.3). Largest latency lever; ~6× less compute on a 5s window. |
+| 9 | **P1-9** variable-length encoder pass | **DONE 2026-09-04** | Landed. p50 4081 → **1423 ms**, a 5.95s window 4017 → **682 ms**, accuracy unchanged (29/29, 0 errors). Note: bit-identical output was an impossible acceptance criterion — the encoder is bidirectional — so it is validated by a CER budget on real audio instead. |
 | 9b | **P1-6** 30s truncation guard | **P1** | Independent, small, removes silent data loss. Pairs naturally with P1-9. |
 | 10 | **P1-5** beam tracker | **P1** | Most complex; wants good refs + confidence first. Sweep `B` (start 4, not a limit). → **M2** |
 | 11 | **P2-1** word-level spans via CTC frame alignment | **P2** | Restores MISSED_WORD; first point at which a word-level false-`WORD_OK` rate is meaningful. |
