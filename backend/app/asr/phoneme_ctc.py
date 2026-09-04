@@ -10,6 +10,7 @@ keep windows ≤30s (no long-form stitcher yet — see plan D4).
 """
 
 import threading
+from typing import NamedTuple
 
 import numpy as np
 import torch
@@ -25,6 +26,20 @@ _WHISPER_SMALL = dict(
     vocab_size=51865, num_mel_bins=80, d_model=768, encoder_layers=12,
     encoder_attention_heads=12, encoder_ffn_dim=3072, max_source_positions=1500,
 )
+
+
+class PhonemeResult(NamedTuple):
+    """Recognition output plus the confidence the CTC head already computed.
+
+    `c_ctc` is a HEURISTIC, not a calibrated probability: it is the mean posterior
+    of the winning class over the frames that survived collapsing. Nothing is
+    fitted against observed correctness (that is plan task P2-3), so it must not
+    be described as calibrated.
+    """
+    ids: list[int]
+    c_ctc: float                # mean posterior over emitted tokens, 0..1
+    token_conf: list[float]     # per-emitted-token posterior
+    blank_frac: float           # share of frames the model called blank
 
 
 class PhonemeCTC:
@@ -74,8 +89,12 @@ class PhonemeCTC:
 
     def ids(self, audio: np.ndarray) -> list[int]:
         """float32 16k mono (≤30s) → collapsed token-ID sequence."""
+        return self.recognize(audio).ids
+
+    def recognize(self, audio: np.ndarray) -> PhonemeResult:
+        """float32 16k mono (≤30s) → IDs + CTC posterior confidence (P0-3)."""
         if len(audio) == 0:
-            return []
+            return PhonemeResult([], 0.0, [], 1.0)
         audio = audio[: _WIN_SAMPLES]  # v1: hard 30s cap
         feats = self._fe(audio, sampling_rate=_SR, return_tensors="pt").input_features
         if settings.phoneme_variable_length:
@@ -88,11 +107,40 @@ class PhonemeCTC:
             h = self._encode(feats) if settings.phoneme_variable_length \
                 else self._enc(feats).last_hidden_state
             logits = h @ self._ctc_w.T + self._ctc_b
-        raw = torch.argmax(logits, dim=-1)[0].tolist()
-        if settings.phoneme_variable_length:
-            return collapse(raw)          # already only real frames — nothing to trim
-        n_real = max(1, round(len(audio) / _SR / 30 * len(raw)))
-        return collapse(raw[:n_real])
+            probs = torch.softmax(logits, dim=-1)
+            conf, cls = probs.max(dim=-1)
+        raw = cls[0].tolist()
+        frame_conf = conf[0].tolist()
+        if not settings.phoneme_variable_length:
+            n_real = max(1, round(len(audio) / _SR / 30 * len(raw)))
+            raw, frame_conf = raw[:n_real], frame_conf[:n_real]
+        return _collapse_with_conf(raw, frame_conf)
+
+
+def _collapse_with_conf(raw: list[int], frame_conf: list[float]) -> PhonemeResult:
+    """CTC collapse that also averages each emitted token's frame posteriors."""
+    ids: list[int] = []
+    token_conf: list[float] = []
+    run: list[float] = []
+    prev = None
+    blanks = 0
+    for i, c in zip(raw, frame_conf):
+        if i == _BLANK:
+            blanks += 1
+        if i != prev and i != _BLANK:
+            ids.append(i)
+            if run:
+                token_conf.append(sum(run) / len(run))
+            run = [c]
+        elif i == prev and i != _BLANK:
+            run.append(c)
+        prev = i
+    if run:
+        token_conf.append(sum(run) / len(run))
+    c_ctc = sum(token_conf) / len(token_conf) if token_conf else 0.0
+    blank_frac = blanks / len(raw) if raw else 1.0
+    return PhonemeResult(ids, round(c_ctc, 4), [round(x, 3) for x in token_conf],
+                         round(blank_frac, 4))
 
 
 def collapse(ids: list[int], blank: int = _BLANK) -> list[int]:

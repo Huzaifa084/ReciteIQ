@@ -28,6 +28,29 @@ from app.ws.session import _origin_allowed, registry  # reuse abuse-control regi
 log = logging.getLogger("reciteiq.phoneme_session")
 
 
+def _audio_stats(audio) -> dict:
+    """Level stats for the window (P1-7 extension).
+
+    Live-caught: amateur browser takes produced ~0.6 IDs/sec where qari audio
+    gives ~4.5, with closest_cer 0.63-1.00. Token starvation like that is either
+    too little signal reaching the model or the model failing on adequate signal,
+    and the two demand opposite fixes — so log the level and stop guessing.
+    """
+    import numpy as _np
+
+    if audio is None or len(audio) == 0:
+        return {"rms_dbfs": None, "peak_dbfs": None, "clip_frac": None}
+    a = _np.asarray(audio, dtype=_np.float32)
+    rms = float(_np.sqrt(_np.mean(a * a)))
+    peak = float(_np.max(_np.abs(a)))
+    to_db = lambda v: round(20.0 * float(_np.log10(v)), 1) if v > 1e-9 else -120.0
+    return {
+        "rms_dbfs": to_db(rms),
+        "peak_dbfs": to_db(peak),
+        "clip_frac": round(float(_np.mean(_np.abs(a) > 0.99)), 5),
+    }
+
+
 class _Detector:
     """Conservative ID-space auto-detect via the phoneme index.
 
@@ -155,7 +178,8 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
             if (data := msg.get("bytes")) is not None:
                 for s in seg.feed(data):
                     _t0 = time.perf_counter()
-                    ids = model.ids(s.audio)
+                    res = model.recognize(s.audio)
+                    ids = res.ids
                     infer_ms = int((time.perf_counter() - _t0) * 1000)
                     win = {
                         "session": session_id,
@@ -163,7 +187,10 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         "closed": s.closed_reason,
                         "infer_ms": infer_ms,
                         "n_ids": len(ids),
-                        "c_ctc": None,          # populated by P0-3
+                        "ids_per_sec": round(len(ids) / max(s.duration, 1e-6), 2),
+                        "c_ctc": res.c_ctc,
+                        "blank_frac": res.blank_frac,
+                        **_audio_stats(s.audio),
                     }
                     if len(ids) < 4:
                         log.info("phoneme window %s", {**win, "outcome": "too_few_ids"})
@@ -216,14 +243,17 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                 if ctl.get("type") == "end":
                     if (s := seg.flush()) is not None and tracker is not None:
                         _t0 = time.perf_counter()
-                        _ids = model.ids(s.audio)
+                        _res = model.recognize(s.audio)
+                        _ids = _res.ids
                         _ms = int((time.perf_counter() - _t0) * 1000)
                         ev = tracker.feed(_ids)
                         tally(ev)
                         log.info("phoneme window %s", {
                             "session": session_id, "window_sec": round(s.duration, 2),
                             "closed": s.closed_reason, "infer_ms": _ms,
-                            "n_ids": len(_ids), "c_ctc": None, **tracker.last_diag,
+                            "n_ids": len(_ids), "c_ctc": _res.c_ctc,
+                            "blank_frac": _res.blank_frac,
+                            **_audio_stats(s.audio), **tracker.last_diag,
                         })
                         if ev:
                             await ws.send_json({
