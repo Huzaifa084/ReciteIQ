@@ -1,81 +1,74 @@
 # Why Al-Fatihah ayah 7 never matched (2026-09-04)
 
-Ayah 7 failed to match in **all six** live browser takes (closest CER 0.583–0.774)
-across both devices and both audio modes. Cause identified.
+Ayah 7 failed to match in **all six** live browser takes (closest CER 0.583–0.774),
+across both devices and both audio configurations. Candidate causes were CTC
+decoding, reference mismatch, long-ayah/model-length behaviour, segmentation, or
+something else.
 
-## Not the model, not the reference
+## It is the length gate in `_best_span`, driven by segmentation
 
-Fed the **whole recitation as one stream** (no windowing), every ayah matches —
-including ayah 7:
+`_best_span` scans candidate span lengths of `0.75L .. 1.35L` for a reference of
+length `L`. **If the window is shorter than `0.75L`, no candidate exists at all**
+and the score is 1.0 by construction — regardless of how perfectly the reciter
+pronounced it. Ayah 7 is 63 IDs, so it needs **≥ 47 IDs in a single window**:
 
-| ayah | ref len | CER on the full stream | ≤ 0.45 |
-|---|---|---|---|
-| 1 | 27 | 0.259 | yes |
-| 2 | 28 | 0.143 | yes |
-| 3 | 16 | 0.125 | yes |
-| 4 | 16 | 0.188 | yes |
-| 5 | 31 | 0.258 | yes |
-| 6 | 24 | 0.417 | yes |
-| **7** | **63** | **0.208** | **yes** |
-
-So the hypotheses can be closed off:
-
-- **CTC decoding** — ruled out. The IDs are good enough to score 0.208.
-- **Reference mismatch** — ruled out. Ayah 7's cross-reciter agreement is 0.868,
-  its six variants span 63–66 ids (tight), and it is not flagged unstable. Its
-  7.00 ids/word is right at the surah median.
-- **Long-ayah / model-length behaviour** — ruled out. The model handles it fine
-  when it sees it whole.
-- **Segmentation / window length** — **this is it.**
-
-## The mechanism: a hard length gate in `_best_span`
-
-`_best_span` only tries candidate span lengths of 0.75 L … 1.35 L. If the window
-is shorter than **0.75 × ref_len**, *no candidate exists at all* and it returns
-CER 1.0 — regardless of how perfectly the reciter pronounced it.
-
-Measured on the real recording, scoring ayah 7 against windows of increasing size:
-
-| window (ids) | CER |
+| window (ids) | CER vs ayah 7 |
 |---|---|
-| 20 | **1.000** — below 0.75 × 63 = 47, no candidate span exists |
-| 26 | **1.000** |
-| 32 | **1.000** |
-| 40 | **1.000** |
-| 47 | 0.524 — a span exists, but still above the 0.45 gate |
-| 55 | 0.524 |
-| **63** | **0.317** — matches |
-| 70 | 0.317 |
+| 18 | 1.000 |
+| 31 | 1.000 |
+| 44 | 1.000 |
+| **46** | **1.000** |
+| **47** | **0.254** |
+| 56 | 0.111 |
+| 63 | 0.000 |
 
-**Ayah 7 needs ~63 ids in a single window**, which at ~6 ids/sec is about **10
-seconds of continuous recitation with no 0.5s pause**. The observed median live
-window is **4.26s / ~26 ids**. Ayah 7 is therefore structurally unmatchable in
-normal use — and it is the only ayah in the surah large enough for this to bite:
+A hard cliff between 46 and 47 IDs. At the observed ~6 IDs/sec that is **7.8
+seconds of continuous recitation with no 0.5s pause** — and the browser takes
+produced windows of ~4.3s / ~26 IDs (largest ~30). Ayah 7 was therefore
+**unscoreable**, not mis-scored.
 
-| ayah | ref ids | min window to match | ≈ seconds |
-|---|---|---|---|
-| 1 | 27 | 20 | 3.3s |
-| 2 | 28 | 21 | 3.5s |
-| 3 | 16 | 12 | 2.0s |
-| 4 | 16 | 12 | 2.0s |
-| 5 | 31 | 23 | 3.8s |
-| 6 | 24 | 18 | 3.0s |
-| **7** | **63** | **47** | **7.8s** |
+## The other candidates are ruled out
 
-A 26-id window can only reach ayahs with ref_len ≤ 34. Ayah 7 (63) is the sole
-ayah above that line — which is exactly why it, and only it, never matched.
+**Not the reference.** Ayah 7's cross-reciter confidence is 0.868 and its six
+variant lengths span 63–66 — as tight an agreement as any other ayah (ayah 2:
+0.977, 28–29).
 
-## Consequence
+**Not CTC decoding.** Every take showed healthy token production (4.9–7.2 IDs/sec
+against a ~4.5 qari reference) and high posteriors (`c_ctc` 0.74–0.99). The model
+was transcribing ayah 7 fine; nothing could score it.
 
-**Carry-forward is the fix for ayah 7.** It accumulates unmatched fragments until
-they reach the length the reference needs, which is precisely this failure. The
-segmentation work was not the fix for the earlier browser failures (those windows
-were already ayah-sized) but it *is* the fix here.
+**Not model-length behaviour.** P1-9's variable-length encoder is validated to
+CER 0.000 against the padded path at 3s and 5s, and 0.018 at 10s.
 
-This also predicts the same failure for every long ayah elsewhere — Al-Baqarah
-2:255 (Ayat al-Kursi) and similar — so it is not a Fatihah quirk. Any ayah whose
-reference exceeds ~34 ids is unreachable from a typical window today.
+**It is segmentation — and the evidence cuts both ways:**
+- The `.ogg` take produced one **24.26s / 174-ID** window and chained
+  `[2,3,4,5,6,7]` — **ayah 7 matched**.
+- The Al-Baqarah take produced windows of 100/87/76/66/66 IDs and matched long
+  ayahs without trouble.
+- Every browser Al-Fatihah take produced ~26-ID windows and never matched ayah 7.
 
-**The CER threshold was not touched**, per instruction. Note that raising it
-would not help anyway: below 47 ids the score is 1.0 by construction, not a
-near-miss. The length gate has to be addressed, not the threshold.
+Same model, same references, same threshold. Only the window size differed.
+
+## Implication
+
+This is the clearest use case yet for **carry-forward**, which is already
+implemented and tested but off by default: it accumulates unplaced fragments until
+they reach a matchable length, which is exactly what a 63-ID ayah needs from ~26-ID
+windows. The synthetic experiment showed carry recovering 4/7 → 7/7 at comparable
+fragmentation.
+
+**No threshold change is warranted.** The failure is not that 0.45 is too strict —
+ayah 7 scored 1.0, infinitely far from any gate. Raising `MATCH_CER_MAX` would not
+have matched a single additional ayah-7 window, and would only increase false
+acceptance elsewhere.
+
+Worth considering separately: the `0.75L` floor is itself a design choice, and a
+long ayah could instead be matched *partially* (crediting the portion covered).
+That is a v2 word-span concern (P2-1), not a threshold tweak.
+
+## Note on evidence handling
+
+The per-window logs for these six sessions were lost when the backend container
+was recreated. The analysis above rests on the reference data, the code path, and
+figures already transcribed into the experiment docs — but per-session diagnostics
+should be persisted outside `docker logs` before the next round of measurement.
