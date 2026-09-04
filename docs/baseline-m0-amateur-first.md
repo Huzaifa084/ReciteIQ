@@ -98,3 +98,60 @@ reciter moved on.
    cannot bound the false-acceptance cost. Do not touch `MATCH_CER_MAX` until the
    intentional-error corpus exists (plan §5.1).
 4. **P1-8 stays downgraded.** Input quality is measurably fine.
+
+---
+
+# P0-1 — multi-reciter references, and a negative result (2026-09-04)
+
+Storage, builder and the pluggable rule all landed, and the pilot references are
+built: **surahs 1, 109, 111, 112, 113 — 27 ayahs × 6 reciters, 0 failures.**
+Per-reciter basmalah templates now come out at 27–28 IDs each, replacing the
+single Husary template that was being applied to every voice.
+
+## The reference reduction rule does NOT yet earn its keep
+
+Leave-one-out on the qari clip (holding out whichever reciter matched best, so a
+voice is never scored against its own reference):
+
+| ayah | husary | min (all 6) | min (LOO) | 2nd (LOO) | per-reciter spread |
+|---|---|---|---|---|---|
+| 1 | 0.074 | 0.074 | 0.074 | 0.074 | 0.07 0.07 0.07 0.07 0.15 0.18 |
+| 2 | 0.107 | 0.107 | 0.107 | 0.107 | 0.11 0.11 0.11 0.11 0.14 0.17 |
+| 3 | 0.125 | 0.125 | 0.125 | 0.188 | 0.12 0.12 0.19 0.20 0.27 0.33 |
+| 4 | 0.000 | 0.000 | 0.000 | 0.062 | 0.00 0.00 0.06 0.12 0.12 0.22 |
+
+| rule | mean CER | ayahs ≤ 0.45 |
+|---|---|---|
+| single | 0.341 | 4/7 |
+| min (all 6) | **0.334** | 4/7 |
+| min (LOO) | 0.340 | 4/7 |
+| second (LOO) | 0.359 | 4/7 |
+
+(Ayahs 5–7 sit at ~0.68–0.72 for *every* reciter because they fall outside the
+22s query window — truncation, not a matching failure. They are why the means
+look high.)
+
+**Multi-reference buys essentially nothing here: 0.341 → 0.334.** And the reason
+is visible in the spread: the six professional reciters produce **highly
+correlated ID sequences** (0.07–0.18 within an ayah). They cluster, so taking the
+minimum over them barely moves the score.
+
+## What this does and does not settle
+
+**Does not settle the amateur case.** The query is a professional whose CER
+against Husary is already 0.07–0.12 — there is no headroom for a better reference
+to recover. The 0.45–0.50 amateur gap can only be tested on amateur audio, which
+is exactly why the rule choice was left to the corpus. `phoneme_ref_rule` stays
+at **`single`**, so production behaviour is unchanged until there is data.
+
+**Does raise a real doubt about the P0-1 hypothesis.** If six professionals
+cluster within 0.11 CER of each other, the amateur's 0.45–0.50 distance is
+probably not "wrong reciter style" — it is more likely that the model represents
+an amateur voice differently from *any* professional. Adding a seventh
+professional would then not help either.
+
+That shifts weight onto **P2-2 speaker enrollment**: the reciter's own voice is
+the only reference guaranteed to match their acoustics, it drops straight into the
+`variants` list with no new matching machinery, and for five short surahs it is a
+few minutes of recording. On this evidence it should be promoted ahead of further
+reference-set expansion — pending the corpus, which remains the arbiter.

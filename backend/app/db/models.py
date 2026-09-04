@@ -57,8 +57,36 @@ class Ayah(Base):
     phoneme_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # cross-reciter agreement
     phoneme_unstable: Mapped[bool] = mapped_column(default=False)  # flagged low-consensus
 
+    # P0-1: one reference per reciter. `phoneme_ids` above stays as the legacy
+    # single-reciter (Husary) canonical so the old path remains a rollback.
+    phoneme_refs: Mapped[list["AyahPhonemeRef"]] = relationship(
+        back_populates="ayah", cascade="all, delete-orphan", lazy="selectin"
+    )
+
     surah: Mapped[Surah] = relationship(back_populates="ayahs")
     words: Mapped[list["Word"]] = relationship(back_populates="ayah", order_by="Word.position")
+
+
+class AyahPhonemeRef(Base):
+    """One reciter's encoder-CTC ID sequence for one ayah (P0-1).
+
+    Measured motivation: the single stored reference is Husary's own CTC output,
+    and an amateur voice scores CER 0.45-0.50 against it where a qari scores
+    0.04-0.21 — right on top of MATCH_CER_MAX. Storing several stylistically
+    diverse reciters lets the matcher score against whichever is closest, and
+    lets the reduction rule (single / min / consensus) be chosen by measurement
+    rather than assumed. See docs/baseline-m0-amateur-first.md.
+    """
+
+    __tablename__ = "ayah_phoneme_refs"
+
+    ayah_id: Mapped[int] = mapped_column(ForeignKey("ayahs.id"), primary_key=True)
+    reciter: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ids: Mapped[list[int]] = mapped_column(JSONB)
+    # provenance, so a licence question can always be answered per reciter
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    ayah: Mapped["Ayah"] = relationship(back_populates="phoneme_refs")
 
 
 class Word(Base):

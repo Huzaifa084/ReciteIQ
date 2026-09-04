@@ -26,8 +26,20 @@ class RefAyah:
     ayah_id: int
     surah: int
     number: int
-    ids: list[int]                  # reference phoneme-ID sequence
+    ids: list[int]                  # canonical (legacy single-reciter) ID sequence
     word_refs: list[dict]           # [{surah,ayah,position,word_id,idx}] for WORD_OK bursts
+    variants: list[list[int]] = field(default_factory=list)   # P0-1: per-reciter refs
+
+    @property
+    def candidates(self) -> list[list[int]]:
+        """Sequences to score this ayah against, honouring the configured rule.
+
+        `single` keeps the legacy behaviour exactly, so multi-reference storage
+        can land before the rule is chosen.
+        """
+        if settings.phoneme_ref_rule == "single" or not self.variants:
+            return [self.ids]
+        return self.variants[: settings.phoneme_ref_max]
 
 
 @dataclass
@@ -149,7 +161,7 @@ class PhonemeTracker:
             for i in range(s, min(len(self.ref), s + self.CHAIN_MAX)):
                 if len(window) - cursor < 4:
                     break
-                cer, _st, e = self._best_span(window[cursor:], self.ref[i].ids)
+                cer, _st, e = self._best_span_ref(window[cursor:], self.ref[i])
                 if cer < probe_best:
                     probe_best, probe_ayah = cer, self.ref[i].number
                 if cer <= self.MATCH_CER_MAX:
@@ -175,6 +187,37 @@ class PhonemeTracker:
             cer_max=self.MATCH_CER_MAX,
         )
         return best
+
+    def _reduce(self, cers: list[float]) -> float:
+        """Reduce K per-reciter CERs to the one score that gates a match.
+
+        The rule is configuration, not a decision baked into the code: `min` is
+        the most permissive (and so the most exposed to false acceptance), while
+        `second`/`median` demand agreement between independent reciters. The
+        corpus chooses (plan §P0-1).
+        """
+        if not cers:
+            return 1.0
+        if len(cers) == 1:
+            return cers[0]
+        rule = settings.phoneme_ref_rule
+        ordered = sorted(cers)
+        if rule == "second":
+            return ordered[1]
+        if rule == "median":
+            return ordered[len(ordered) // 2]
+        return ordered[0]                      # "min", and the default fallback
+
+    def _best_span_ref(self, window: list[int], ref: RefAyah) -> tuple[float, int, int]:
+        """Best span for an ayah across all of its candidate references."""
+        cands = ref.candidates
+        if len(cands) == 1:
+            return self._best_span(window, cands[0])
+        scored = [self._best_span(window, c) for c in cands]
+        cer = self._reduce([s[0] for s in scored])
+        # keep the span of the reference that actually achieved the chosen score
+        best = min(scored, key=lambda t: abs(t[0] - cer))
+        return (cer, best[1], best[2])
 
     def _best_span(self, window: list[int], ref_ids: list[int]) -> tuple[float, int, int]:
         """Best-matching contiguous span of `window` for one ayah reference.

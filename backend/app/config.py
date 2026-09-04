@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     # is not evidence the reciter skipped anything.
     phoneme_uncertain_after: int = 2           # consecutive no-match windows before flagging
     phoneme_conf_floor: float = 0.35           # c_ctc below this: never claim a miss
+
+    # --- P0-1: multi-reciter references ---
+    # How to reduce K per-reciter CERs to one score. Deliberately NOT decided in
+    # advance — the corpus picks the winner (plan §P0-1):
+    #   single    legacy: the canonical (Husary) reference only
+    #   min       score against whichever reciter is closest (most permissive)
+    #   second    2nd-smallest: needs two independent references to agree
+    #   median    middle of the K references
+    # `min` raises False Ayah Acceptance Rate as K grows, so MATCH_CER_MAX must be
+    # recalibrated per rule and per K. Never ship a new rule without measuring FAAR.
+    phoneme_ref_rule: str = "single"
+    phoneme_ref_max: int = 6                   # cap references considered per ayah
     asr_model_path: str = "models/whisper-base-ar-quran-ct2"
     asr_compute_type: str = "int8"
     asr_cpu_threads: int = 2                   # per-inference threads

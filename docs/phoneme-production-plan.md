@@ -89,9 +89,21 @@ max 4318 ms over 4 windows on `fatiha_full.wav`, and **constant with respect to
 window length** (5.09s → 3927 ms; 21.95s → 4081 ms). See §5.3 — this invalidated the
 plan's original `RTF × window_sec` model and produced task **P1-9**.
 
-**Still not measured:** any accuracy figure on amateur voices. The reported ~4–5%
-real-world success is a user observation, not an instrumented metric, and it predates
-the one-ayah-per-window fix.
+**Amateur voice — measured 2026-09-04** (first real data, full table in
+`docs/baseline-m0-amateur-first.md`). Input quality is *healthy*: `rms_dbfs` p50
+−27.7, `ids_per_sec` p50 5.14 (above the ~4.5 qari reference), `c_ctc` 0.68–0.93.
+The failure is representational, not acoustic:
+
+| | CER against the Husary reference |
+|---|---|
+| qari | 0.037 – 0.208 |
+| **amateur** | **0.312 – 1.000, clustering 0.45 – 0.50** |
+
+`MATCH_CER_MAX = 0.45` therefore sits *on top of* the amateur distribution — only
+2/12 windows matched, with near-misses at 0.452, 0.464, 0.500. Relaxing the gate
+**saturates at 5/12**, so it is not a fix on its own: half the windows are genuinely
+far away and need a closer reference (P0-1), not a looser threshold. **Do not touch
+`MATCH_CER_MAX` before the intentional-error corpus can bound FAAR.**
 
 ---
 
@@ -797,10 +809,10 @@ frame; `UNCERTAIN` is a tracker decision.
 | 2 | **`M0-pre`** minimal as-is audio baseline | **DONE 2026-09-04** | Quantified deterministically by porting `recorder.ts` and running device-rate audio through both paths — see `docs/baseline-m0-pre-serverside.md`. Signal damage is severe (−1.57% drift, full-amplitude aliasing) but **downstream tracker output is identical** on clean audio (29/29 words, 0 errors both ways). |
 | 3 | ~~**P1-8** worklet decimation~~ → **moved to P1** | **P1** | **Downgraded on evidence.** Was P0-blocking on the assumption that corrupted input invalidates all measurement; that is falsified for clean audio. Still worth fixing, but it no longer blocks P0-1. Re-test on amateur takes once the corpus exists — their HF content folds differently. |
 | 4 | **`M0`** corpus + formal baseline | **P0** | The reference point for every gate. Measured after P1-7 **and** P1-8. |
-| 5 | **P0-1** multi-reference storage, then scoring-rule comparison | **P0** | Top suspect for the accuracy gap. Storage first; single vs min-CER vs consensus chosen on calibration/validation data. Pilot surahs only. Licensing verified before any public release. |
+| 5 | **P0-1** multi-reference storage, then scoring-rule comparison | **IN PROGRESS** | Storage landed: `ayah_phoneme_refs` (migration `a1c4e7f20b91`), 6 stylistically diverse reciters, per-reciter basmalah templates, mean-pairwise confidence, and a pluggable `RECITEIQ_PHONEME_REF_RULE` (`single`/`min`/`second`/`median`) defaulting to `single` so nothing changes until the corpus decides. Pilot references building. |
 | 6 | **P0-2** pilot rebuild + drop the unstable exclusion | **P0** | Depends on 5; removes the ayah-1 penalty. |
 | 7 | **P0-3** CTC posterior confidence | **P0** | Ship with `k_conf = 0` until fitted. Heuristic, not calibration. |
-| 8 | **P0-4** `no_match` + `UNCERTAIN` | **P0** | Needs 7 for `c_ctc`; makes failures visible. → **M1** |
+| 8 | **P0-4** `no_match` + `UNCERTAIN` | **DONE 2026-09-04** | Landed as a **correctness** fix, not just UI: the tracker was reporting every unmatched ayah in a chained span as MISSED_AYAH, so unplaced windows produced false red (live: credited [4,6], marked 1/2/3/5 missed though all were recited). Now only in-window skips are misses; cross-window gaps are UNCERTAIN. `fatiha_skip3` still reports exactly one miss on ayah 3. |
 | 9 | **P1-9** variable-length encoder pass | **DONE 2026-09-04** | Landed. p50 4081 → **1423 ms**, a 5.95s window 4017 → **682 ms**, accuracy unchanged (29/29, 0 errors). Note: bit-identical output was an impossible acceptance criterion — the encoder is bidirectional — so it is validated by a CER budget on real audio instead. |
 | 9b | **P1-6** 30s truncation guard | **P1** | Independent, small, removes silent data loss. Pairs naturally with P1-9. |
 | 10 | **P1-5** beam tracker | **P1** | Most complex; wants good refs + confidence first. Sweep `B` (start 4, not a limit). → **M2** |
