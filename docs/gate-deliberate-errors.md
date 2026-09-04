@@ -94,3 +94,60 @@ surrounding verses make it predictable.
 could still normalise a *mispronounced* word toward the expected one, and that is
 the failure mode most relevant to Tajweed feedback. One recording of a
 deliberately wrong word in Az-Zalzalah would close it.
+
+---
+
+# Substitution gate — natively recorded (2026-09-04)
+
+`/root/temp/zilzal-with-errors.ogg`, 27.5s — real audio of real mistakes, not a
+surgical edit. This closes the gap left above.
+
+| take | duration | RTF | words | WER vs expected | CER vs expected |
+|---|---|---|---|---|---|
+| clean `zilzal.ogg` | 32.6s | 0.122 | 36 | **0.0000** | **0.0000** |
+| `zilzal-with-errors.ogg` | 27.5s | 0.149 | 30 | **0.2500** | **0.1813** |
+
+RSS 1616 MB (unchanged).
+
+## The deliberate errors, and what the model did with each
+
+The clean take is word-perfect, so differences against the clean take and against
+the canonical text are **identical** — the diff isolates exactly the deliberate
+errors.
+
+| ayah | reference | actually spoken | hypothesis | preserved? |
+|---|---|---|---|---|
+| 2 | أَثْقَالَهَا | **زِلْسَالَهَا** | زلسالها | **YES** |
+| 4 | أَخْبَارَهَا | **أَثْقَالَهَا** | اثقالها | **YES** |
+| 5 | بِأَنَّ | **لِأَنَّ** | لان | **YES** |
+| 7 | يعمل / مثقال / ذرة / خيرا / يره / ومن | *(skipped)* | (nothing) | **YES** |
+
+Per-ayah words correct vs expected: `1:4/4 2:2/3 3:4/4 4:2/3 5:3/4 6:6/6 7:1/6 8:5/6`
+
+**All four deliberate errors survived. Zero corrections.**
+
+## Why this is decisive, not merely positive
+
+**1. The model emitted a non-Quranic word.** `زِلْسَالَهَا` does not occur
+anywhere in the Qur'an — it is a blend of `زِلْزَالَهَا` and `أَثْقَالَهَا`. A model
+that normalises toward scripture had every opportunity to snap it to the expected
+`أَثْقَالَهَا`, and instead reported a word that exists nowhere in its training
+text.
+
+**2. The hardest case is ayah 4.** The reciter substituted `أَثْقَالَهَا` — a word
+that *is* Quranic and appears two ayahs earlier — where `أَخْبَارَهَا` was
+expected. Context makes `أَخْبَارَهَا` overwhelmingly predictable, and a
+language-model-biased recogniser would repair it silently. FastConformer reported
+what was said.
+
+**3. A single-letter substitution survived.** `بِأَنَّ` → `لِأَنَّ` differs by one
+consonant and is the kind of slip an acoustic model is most tempted to smooth.
+
+**4. The skipped ayah stayed absent**, consistent with the surgical-edit results.
+
+## Verdict: validation gate COMPLETE
+
+FastConformer transcribes the recitation, not the scripture — across omissions,
+repetitions, identical-verse transitions, and now genuine substitutions including
+a non-existent word. This is the property the whole product depends on: the
+system can only flag a mistake the recogniser is willing to report.
