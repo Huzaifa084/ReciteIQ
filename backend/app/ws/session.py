@@ -32,6 +32,24 @@ from app.nlp.normalize import tokenize
 log = logging.getLogger("reciteiq.session")
 
 
+def _audio_stats(audio) -> dict:
+    """Level stats per window. Ported from the phoneme path, where they were what
+    finally separated 'bad audio in' from 'model failing on good audio' — the
+    browser takes had healthy level and token rate, which is what redirected the
+    investigation away from the microphone and onto the recogniser."""
+    import numpy as _np
+
+    if audio is None or len(audio) == 0:
+        return {"rms_dbfs": None, "peak_dbfs": None, "clip_frac": None}
+    a = _np.asarray(audio, dtype=_np.float32)
+    to_db = lambda v: round(20.0 * float(_np.log10(v)), 1) if v > 1e-9 else -120.0
+    return {
+        "rms_dbfs": to_db(float(_np.sqrt(_np.mean(a * a)))),
+        "peak_dbfs": to_db(float(_np.max(_np.abs(a)))),
+        "clip_frac": round(float(_np.mean(_np.abs(a) > 0.99)), 5),
+    }
+
+
 class SessionRegistry:
     def __init__(self):
         self.active: dict[str, "LiveSession"] = {}
@@ -280,6 +298,24 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
 
                     events = live.tracker.feed_segment(tokens, forced_cut=forced)
                     live.record(events)
+                    # Per-window diagnostics, ported from the phoneme path (P1-7).
+                    # Every diagnosis on that path — the one-ayah-per-window bug,
+                    # the ayah-7 length gate, the 1:3-inside-1:1 anchor case — was
+                    # only findable because each window left a structured record.
+                    # The text path must be measurable from day one.
+                    log.info("asr window %s", {
+                        "session": str(live.id),
+                        "window_sec": round(seg.duration, 2),
+                        "closed": seg.closed_reason,
+                        "asr_ms": round(tr.asr_seconds * 1000),
+                        "n_tokens": len(tokens),
+                        "tokens_per_sec": round(len(tokens) / max(seg.duration, 1e-6), 2),
+                        "gated": tr.gated,
+                        "pointer": live.tracker.pointer,
+                        "n_events": len(events),
+                        "types": sorted({e.type.value for e in events}),
+                        **_audio_stats(seg.audio),
+                    })
                     await asyncio.to_thread(_persist_events, live.id, events)
                     await ws.send_json(
                         {

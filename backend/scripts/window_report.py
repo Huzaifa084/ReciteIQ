@@ -16,7 +16,7 @@ import json
 import re
 import sys
 
-_WIN = re.compile(r"phoneme window (\{.*\})")
+_WIN = re.compile(r"(?:phoneme|asr) window (\{.*\})")
 _INFO = re.compile(r"phoneme client_info (\{.*\})")
 
 

@@ -6,6 +6,10 @@ from app.config import settings
 
 
 def get_engine() -> ASREngine:
+    if settings.asr_engine == "fastconformer":
+        from app.asr.fastconformer import get_engine as _fc
+
+        return _fc()
     if settings.asr_engine == "cloud":
         from app.asr.cloud import get_engine as _cloud
 

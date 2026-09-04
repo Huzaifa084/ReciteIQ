@@ -10,7 +10,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://reciteiq:reciteiq@127.0.0.1:19832/reciteiq"
 
     # --- ASR (decision 9: strict thread budget on 6 shared cores) ---
-    asr_engine: str = "whisper_local"          # whisper_local | cloud (Groq + local fallback)
+    asr_engine: str = "whisper_local"          # whisper_local | cloud | fastconformer
+    # NeMo FastConformer, Quran-fine-tuned. Validated on six real amateur
+    # recitations (289/299 words, WER 0.0443) and on deliberate errors, where it
+    # preserved every one including a word that occurs nowhere in the Qur'an
+    # (docs/gate-deliberate-errors.md). Opt in with RECITEIQ_ASR_ENGINE=fastconformer.
+    fastconformer_repo: str = "mohammed/fastconformer-quran-ar"
+    fastconformer_checkpoint: str = "phase3_full/phase3_full_wer0.0014.nemo"
     groq_api_key: str = ""                     # https://console.groq.com (free: 2000 req/day)
     groq_model: str = "whisper-large-v3-turbo"
     cloud_timeout_sec: float = 8.0
