@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # so consecutive fragments are matched together. Fixes fragmentation at zero
     # cost on clean audio (7/7 -> 7/7 natural, 4/7 -> 7/7 at 2.5s) and adds no
     # inference, since it reuses IDs already computed.
+    # Partial-coverage matching: score a window that is SHORTER than an ayah
+    # against the best same-length span of that ayah, instead of scoring 1.0
+    # because no candidate span exists. A partial match HOLDS position — it never
+    # credits the ayah and never reports it missed. Fixes ayah 7 of Al-Fatihah,
+    # which is 63 ids and needs >=47 in one window against live windows of ~26.
+    phoneme_partial_coverage: bool = False
+    phoneme_partial_min_covered: float = 0.25   # ignore slivers below this fraction
+
     phoneme_carry_forward: bool = False
     phoneme_carry_max_ids: int = 400           # safety cap on the carry buffer
     # revoke_late_miss: withdraw a MISSED_AYAH when a later window proves the ayah

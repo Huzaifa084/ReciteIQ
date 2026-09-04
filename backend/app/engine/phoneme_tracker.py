@@ -85,6 +85,21 @@ class PhonemeTracker:
             return events
 
         chain = self._chain(window_ids)
+        if not chain and settings.phoneme_partial_coverage:
+            # No ayah fits the window whole. Before declaring nothing, ask the
+            # asymmetric question: is this window PART of the ayah we expect?
+            partial = self._partial_at_pointer(window_ids)
+            if partial is not None:
+                cer, covered, num = partial
+                self.last_diag.update(outcome="partial", partial_ayah=num,
+                                      partial_cer=round(cer, 3),
+                                      partial_covered=round(covered, 3),
+                                      chain_len=0, matched_ayahs=[])
+                # Hold position: credit nothing, advance nothing, flag nothing.
+                # The reciter is mid-ayah, which is neither progress nor a mistake.
+                self._no_match_run = 0
+                self._clear_jump(events)
+                return events
         self.last_diag["chain_len"] = len(chain)
         self.last_diag["matched_ayahs"] = [self.ref[i].number for i in chain]
         low_conf = c_ctc is not None and c_ctc < settings.phoneme_conf_floor
@@ -202,6 +217,25 @@ class PhonemeTracker:
         )
         return best
 
+    def _partial_at_pointer(self, window: list[int]) -> tuple[float, float, int] | None:
+        """Is this window a well-recited PART of an ayah at or near the pointer?
+
+        Only looks in a tight band around the pointer: a partial match is weak
+        evidence, so it must not be allowed to relocate the reciter.
+        """
+        lo = max(0, self.pointer - 1)
+        hi = min(len(self.ref), self.pointer + 2)
+        best = None
+        for i in range(lo, hi):
+            for cand in self.ref[i].candidates:
+                if len(window) >= len(cand):
+                    continue                      # not the partial case
+                cer, covered = self.coverage(window, cand)
+                if cer <= self.MATCH_CER_MAX and covered >= settings.phoneme_partial_min_covered:
+                    if best is None or cer < best[0]:
+                        best = (cer, covered, self.ref[i].number)
+        return best
+
     def _reduce(self, cers: list[float]) -> float:
         """Reduce K per-reciter CERs to the one score that gates a match.
 
@@ -253,6 +287,39 @@ class PhonemeTracker:
                 if cer < best[0]:
                     best = (cer, start, start + ln)
         return best
+
+    def coverage(self, window: list[int], ref_ids: list[int]) -> tuple[float, float]:
+        """ASYMMETRIC score for a window SHORTER than the reference.
+
+        `_best_span` compares the window against the WHOLE ayah, so it needs at
+        least 0.75L ids before any candidate span exists — below that it returns
+        1.0 by construction. Ayah 7 of Al-Fatihah is 63 ids and needs >=47 in one
+        window (~7.8s unbroken), while live browser windows are ~26: it scored 1.0
+        in all six takes not because it was mis-recited but because it could not
+        be scored at all (docs/analysis-ayah7.md).
+
+        Borrowed from quran-recitation-finder, which measures how much of the
+        QUERY a passage explains rather than how similar two strings are,
+        precisely because "a partial recitation is a subset of an ayah, so a
+        symmetric measure would punish exactly the case the app is built for".
+
+        Here the window is matched against the best REFERENCE-side span of its own
+        length. Returns (cer, covered) where `covered` is the fraction of the
+        reference the window accounts for — so a caller can tell "part of this
+        ayah, well recited" from "this whole ayah".
+        """
+        if not ref_ids or not window:
+            return 1.0, 0.0
+        W, L = len(window), len(ref_ids)
+        if W >= L:                       # not the partial case; defer to _best_span
+            return self._best_span(window, ref_ids)[0], 1.0
+        best = 1.0
+        stride = max(1, W // 4)
+        for start in range(0, L - W + 1, stride):
+            cer = Levenshtein.normalized_distance(window, ref_ids[start:start + W])
+            if cer < best:
+                best = cer
+        return best, W / L
 
     def _mark_uncertain(self, i: int, events: list[Event]) -> None:
         """Flag an ayah as heard-but-unplaced. PROVISIONAL by construction — it is
