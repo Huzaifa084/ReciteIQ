@@ -127,44 +127,74 @@ Two further defects in the same function:
 5. `phoneme_unstable` stops being an exclusion. An ayah is **trackable if it has
    ≥ 1 reference**; agreement becomes a soft input to confidence (P0-3), not a gate.
 
-**Reference-selection strategy — min-CER over variants.** `RefAyah.ids: list[int]`
-becomes `RefAyah.variants: list[list[int]]`. `_best_span(window, variants)` returns
-`(cer, start, end, variant_idx)` where `cer = min` over variants of that variant's
-best span CER. Rationale: a reciter's style resembles *some* professional more than
-others; scoring against the closest reference is a max-over-hypotheses (logical OR)
-and strictly reduces false MISSED_AYAH relative to a single fixed reference.
+**Reference-selection strategy — storage first, scoring rule chosen by measurement.**
+**Implement multi-reference storage first.** `RefAyah.ids: list[int]` becomes
+`RefAyah.variants: list[list[int]]`, and `_best_span(window, variants)` returns
+`(cer, start, end, variant_idx)` under a **pluggable** reduction over variants.
+
+Then **evaluate single-reference, min-CER, and 2nd-smallest/consensus strategies on
+the calibration/validation data before selecting the production scoring rule.** No
+strategy is committed to in advance:
+
+| Candidate rule | Expected trade-off |
+|---|---|
+| **single-reference** (today) | baseline; highest false MISSED_AYAH on style mismatch |
+| **min-CER** | lowest false MISSED_AYAH; highest false-acceptance exposure |
+| **2nd-smallest / median (consensus)** | needs two independent references to agree; middle ground |
+
+Rationale for expecting a multi-reference rule to help at all: a reciter's style
+resembles *some* professional more than others, so scoring against a closer
+reference should reduce false MISSED_AYAH relative to one fixed reference. Whether
+the right reduction is `min` or a consensus rule is an **empirical question**, and
+`RECITEIQ_PHONEME_REF_RULE` selects it so the comparison is a config change, not a
+rewrite.
 
 **Why it fixes a measured problem.** Directly attacks the top suspect for the
 4–5% figure. Qari audio already scores CER 0.037–0.208 against a same-style
-reference; the gap is style mismatch, and min-CER over a diverse set is the
-cheapest way to close it. Also recovers the 20 fetch-failure ayahs and removes the
+reference; the gap is style mismatch, and a diverse reference set is the cheapest
+way to close it. Also recovers the 20 fetch-failure ayahs and removes the
 cross-reciter basmalah-strip bug.
 
-**Dependencies / risk.** **This is the plan's main risk.** Taking the min over K
-references lowers CER for *wrong* ayahs too, so it raises **false accepts**
-(crediting an ayah that was not correctly recited). Mitigations, in order:
-- Re-calibrate `MATCH_CER_MAX` **as a function of K** on the validation split — it
-  must come *down* as K grows. Never keep 0.45 while adding references.
+**Dependencies / risk.** **This is the plan's main risk.** Any permissive reduction
+over K references (`min` most of all) lowers CER for *wrong* ayahs too, so it raises
+the **False Ayah Acceptance Rate** — crediting an ayah that was not correctly
+recited. Mitigations, in order:
+- Re-calibrate `MATCH_CER_MAX` **as a function of K and of the chosen rule** on the
+  calibration split — it must come *down* as K grows. Never keep 0.45 while adding
+  references.
 - Add a **variant-consistency constraint**: within one chain, prefer the variant
   family that wins most links; penalise chains that hop between variants.
-- If false accepts still exceed the §5 gate, fall back from `min` to
-  **2nd-smallest** (or median) CER over variants, which needs two independent
-  references to agree.
+- If FAAR exceeds the §6.2 gate under `min`, select the **2nd-smallest/consensus**
+  rule instead — which is why the rule is pluggable rather than hard-coded.
 Requires a migration and a re-run of the reference batch (network + ~6× the
 inference of the original build; scope to the pilot surahs first — that is ~141
 ayahs, not 6236).
 
+**Release requirement — reference-audio licensing.** **Verify
+redistribution/licensing terms for all reference reciter audio before including
+those assets in any public repository, thesis artifact, or deployment package.**
+This applies to every voice added to `RECITERS`, not just the current two. Note
+that today's pipeline stores only derived integer ID sequences and discards the
+audio (`fetch_audio` writes to a `TemporaryDirectory`), which is the posture to
+preserve: **derived references may be distributable where the source audio is
+not.** Record the per-reciter licence and source URL alongside each reference set,
+and treat an unverified licence as a blocker for public release — not for local
+development.
+
 **How it will be tested.**
-- `test_multi_variant_min_cer`: a synthetic variant set where the query matches
-  only variant 3 still yields a match; querying an unrelated ayah still does not.
+- `test_multi_variant_reduction_rules`: a synthetic variant set where the query
+  matches only variant 3 yields a match under `min`, and does **not** under the
+  consensus rule — pinning the semantics of each reduction so the strategy
+  comparison is meaningful. Querying an unrelated ayah matches under neither.
 - `test_variant_fetch_failure_does_not_flag_unstable`: one failed reciter leaves
   `n_refs = K-1` and the ayah trackable.
 - `test_per_reciter_basmalah_strip`: reciter B's ayah 1 is stripped with B's own
   template, and the surviving sequence matches B's ayah-1-without-basmalah.
 - Regression: `fatiha_full.wav` must stay at **29/29 words, 0 false events**, and
   `fatiha_skip3.wav` at exactly one MISSED_AYAH on ayah 3.
-- False-accept measurement on the intentional-error corpus (§4) is the acceptance
-  gate, not the unit tests.
+- **False Ayah Acceptance Rate** on the intentional-error corpus (§5.2) is the
+  acceptance gate, not the unit tests. The scoring-rule selection is decided by
+  this measurement.
 
 ---
 
@@ -299,7 +329,7 @@ asserting `no_match` frames arrive and no `MISSED_AYAH` is produced.
 
 ---
 
-## 4. P1 — accuracy, ambiguity, and audio quality
+## 4. P1 and P2 — accuracy, ambiguity, audio quality, and deferred work
 
 ### P1-5 · Multi-hypothesis (beam) tracker for identical verses
 
@@ -319,7 +349,10 @@ Hypothesis(pointer, recited: frozenset, score: float, pending: list[Event])
 
 Per window: expand every hypothesis with its candidate chains, score each by
 accumulated `(1 - mean_cer)` weighted by `c_ctc` plus a mild forward-progress prior,
-prune to the top `B` (default 4; `phoneme_beam_width` in config).
+prune to the top `B`. **Initial beam width `B = 4`; configurable
+(`phoneme_beam_width`) and benchmarked. `B = 4` is not a design limit** — it is a
+starting point to be swept against accuracy and per-window latency (§P1-7), and
+raised or lowered on that evidence.
 
 **Commit rule — deferred commitment.** Events flush to the client only when either
 (a) all surviving hypotheses agree on them, or (b) one hypothesis leads by
@@ -469,6 +502,66 @@ must equal `floor(input_count / ratio)` ± 1 over 1000 blocks (proving no 1.56% 
 End-to-end: re-run the eval clips through the browser path and confirm CER does not
 regress.
 
+### P2-1 · Word-level spans via CTC frame alignment
+
+**File:** `app/asr/phoneme_ctc.py`, `app/engine/phoneme_tracker.py`
+
+**Current behavior.** Phoneme mode credits whole ayahs: `_confirm_ayah` bursts
+`WORD_OK` for every word of a matched ayah as soft progress, and **`MISSED_WORD` is
+never emitted** (a documented v1 invariant, `test_no_missed_word_events_ever`).
+
+**Proposed behavior.** Use the CTC frame indices already available before collapsing
+(P0-3 exposes them) to map ID spans back to word boundaries within the matched ayah,
+giving per-word spans and restoring `MISSED_WORD`. Unlocks the word-level
+false-`WORD_OK` metric (§5.2).
+
+**Why.** Missed-word detection is a headline feature currently absent from the
+production path. **Risk:** word boundaries in a 39-symbol ID space are approximate;
+must not regress FAAR by converting ayah-level uncertainty into confident word-level
+errors. **Test:** word spans on pilot surahs against hand-annotated boundaries; the
+v1 invariant test is replaced, not deleted.
+
+### P2-2 · Speaker enrollment (personal references)
+
+Extend P0-1's variant list with the user's **own** recitation of the pilot surahs,
+captured once. Natural continuation of multi-reference storage — an enrolled voice
+is just another variant, so no new matching machinery. Likely the single largest
+accuracy win for a scoped surah set. Requires per-user reference storage and a
+consent/privacy path, since this is the first time user audio is used to derive
+anything persistent.
+
+### P2-3 · True calibration of `c_ctc`
+
+Fit an isotonic or Platt calibrator mapping `c_ctc` → P(correct match) on the
+calibration split. **Only after this is fitted may the word "calibrated" be used**
+in the thesis; until then `c_ctc` is a confidence *heuristic* (§P0-3).
+
+### P2-4 · Phonetic similarity as a scoring feature
+
+If phonetic tolerance is added — for near-miss consonants such as ص/س, ط/ت, ظ/ذ,
+ق/ك, ح/ه — it enters as a **soft similarity feature inside the scorer only**.
+
+> **Phonetic equivalence mappings must not modify canonical Quran text; they are
+> applied only inside the phonetic similarity feature.**
+
+Concretely: `text_uthmani` and the word-level Imlaei text are never rewritten;
+`nlp/normalize.py` is not extended to merge these pairs (it already correctly keeps
+them distinct — §1); and stored `phoneme_ids` / reference variants are never
+folded. A phonetic mapping is a *scoring* concession to accent variation, never a
+claim that two Quranic letters are the same letter. Merging them into canonical
+text would silently mask genuine pronunciation errors and corrupt the reference
+data for every future experiment.
+
+Applies equally to the ID space: if near-confusable CTC symbols are given partial
+credit, that partial credit lives in the distance function, not in the stored
+sequences.
+
+### P2-5 · Overlap-vs-smart-cut decision
+
+Decide from P1-7's `segment_closed_reason` and per-window CER data whether
+overlapping windows beat the existing VAD smart cuts. **Do nothing unless the
+measurement shows a clear benefit** (§1).
+
 ---
 
 ## 5. Evaluation protocol
@@ -480,7 +573,7 @@ Pilot surahs **1, 109, 111, 112, 113** (+ **67**). ~141 ayahs for the five core 
 | Split | Speakers | Purpose |
 |---|---|---|
 | **Train / calibration** | 3 (mixed native + non-native) | Fit `MATCH_CER_MAX(K)`, `phoneme_conf_floor`, `k_conf`, beam constants |
-| **Validation** | 2 | Iterate design choices; check false accepts while tuning |
+| **Validation** | 2 | Iterate design choices; compare reference-scoring rules; watch FAAR while tuning |
 | **Held-out** | 3 (≥ 1 native, ≥ 2 non-native) | Touched **once**, for the final thesis numbers |
 
 **Splitting is by speaker, never by clip.** A speaker appearing in two splits
@@ -503,11 +596,20 @@ intervals. Report intervals, not bare point estimates.
 
 Ayah-level first, since phoneme v1 credits whole ayahs.
 
+**Naming, deliberately:** through P0 and P1 the tracker has **no word alignment** —
+it credits an ayah by bursting `WORD_OK` for all of that ayah's words as soft
+progress, which is explicitly *not* a per-word judgement. So the early safety metric
+is the **False Ayah Acceptance Rate (FAAR)**, defined at ayah granularity. A true
+**word-level false-`WORD_OK` rate** is only meaningful once **P2-1** provides CTC
+frame-level word alignment, and is introduced then (§4, P2-1). Do not report a
+word-level false-`WORD_OK` figure before P2-1 — with ayah-level crediting the
+denominator would be fictional.
+
 | Metric | Definition |
 |---|---|
 | **Ayah recall (clean)** | credited ayahs ÷ ayahs actually recited |
 | **False MISSED_AYAH rate (clean)** | correctly recited ayahs flagged missed ÷ ayahs recited |
-| **False `WORD_OK` / false-accept rate** | ayahs containing a deliberate error that were credited `WORD_OK` ÷ ayahs containing a deliberate error. **The critical safety metric** — an app that greenlights wrong recitation is worse than one that says "unsure". Ayah-level crediting is structurally prone to this, so it must be measured, not assumed. |
+| **False Ayah Acceptance Rate (FAAR)** | ayahs containing a deliberate error that were nonetheless credited ÷ ayahs containing a deliberate error. **The critical safety metric** — an app that greenlights wrong recitation is worse than one that says "unsure". Ayah-level crediting is structurally prone to this, so it must be measured, not assumed. |
 | **Missed-ayah recall** | deliberately skipped ayahs correctly reported |
 | **Identical-verse resolution accuracy** | 109 3-vs-5 decided correctly (P1-5) |
 | **Benign repeat accuracy** | restart/repeat takes producing zero error events |
@@ -543,11 +645,24 @@ partial hypotheses). Out of scope for v1; note it as future work.
 
 ### 6.1 M0 — baseline (no targets, just numbers)
 
-Land **P1-7** and **P1-8**, record the corpus, then measure every §5.2 metric on the
-calibration + validation splits with today's code (plus the already-landed
-one-ayah-per-window fix). **No accuracy target is set before this exists.** M0 is the
-number the thesis improves on, and it converts the anecdotal "4–5%" into an
-instrumented figure.
+**Before P1-8, capture a minimal as-is baseline on the current deployed audio path.
+This is diagnostic only and is not used as the formal thesis baseline.** Land
+**P1-7** first (instrumentation), then run the pilot clips and a handful of live
+amateur takes through the **unmodified** resampler and record per-window `c_ctc`,
+`best_cer`, `chain_len` and ayah recall. Re-running the identical set after P1-8
+isolates the effect of the 1.56% sample-loss and aliasing bug from every other
+change in this plan — otherwise the resampler fix and the reference work land
+together and neither effect is separable.
+
+Keep this run small and clearly labelled `M0-pre` in the results: same speakers,
+same clips, same surahs, no corpus-wide effort. It is a diagnostic delta, not a
+reportable result.
+
+**The formal baseline (`M0`)** is then measured after P1-7 **and** P1-8, on the
+recorded corpus: every §5.2 metric on the calibration + validation splits with
+today's tracker (including the already-landed one-ayah-per-window fix). **No
+accuracy target is set before `M0` exists.** `M0` is the number the thesis improves
+on, and it converts the anecdotal "4–5%" into an instrumented figure.
 
 ### 6.2 Gates
 
@@ -555,9 +670,9 @@ Each gate is relative to M0 plus an absolute floor on the safety metric.
 
 | Milestone | Content | Gate |
 |---|---|---|
-| **M1** | P0-1, P0-2, P0-3, P0-4 | Ayah recall ≥ 2× M0 on validation; false MISSED_AYAH below M0; **false-accept ≤ 10%**; zero regression on the two Fatihah clips |
-| **M2** | P1-5 (beam), P1-6 | Identical-verse resolution ≥ 90% on 109; **false-accept ≤ 5%**; per-window P95 ≤ 3.5s |
-| **M3** | P2 items | Word-level spans on pilot surahs; false-accept ≤ 3% |
+| **M1** | P0-1, P0-2, P0-3, P0-4 | Ayah recall ≥ 2× M0 on validation; false MISSED_AYAH below M0; **FAAR ≤ 10%**; zero regression on the two Fatihah clips |
+| **M2** | P1-5 (beam), P1-6 | Identical-verse resolution ≥ 90% on 109; **FAAR ≤ 5%**; per-window P95 ≤ 3.5s |
+| **M3** | P2 items | Word-level spans on pilot surahs; **FAAR ≤ 3%**, and word-level false-`WORD_OK` reported for the first time (enabled by P2-1) |
 
 Stretch targets (ayah recall ≥ 95%, false alarms ≤ 4%) are stated as **aspirations
 until M0 exists**. Committing to ≥ 95% from a 4–5% starting point with nothing in
@@ -584,20 +699,26 @@ frame; `UNCERTAIN` is a tracker decision.
 | Order | Task | Priority | Why here |
 |---|---|---|---|
 | 1 | **P1-7** instrumentation | **P0-blocking** | Nothing can be tuned or gated without it. Cheap, zero-risk. |
-| 2 | **P1-8** worklet decimation | **P0-blocking** | Upstream of every measurement; 1.56% sample loss + aliasing corrupts all downstream numbers. Frontend-only, so parallel with 3–4. |
-| 3 | **M0 corpus + baseline** | **P0** | The reference point for every gate. |
-| 4 | **P0-1** multi-reciter references | **P0** | Top suspect for the accuracy gap. Pilot surahs only. |
-| 5 | **P0-2** pilot rebuild + drop the unstable exclusion | **P0** | Depends on 4; removes the ayah-1 penalty. |
-| 6 | **P0-3** CTC posterior confidence | **P0** | Ship with `k_conf = 0` until fitted. |
-| 7 | **P0-4** `no_match` + `UNCERTAIN` | **P0** | Needs 6 for `c_ctc`; makes failures visible. → **M1** |
-| 8 | **P1-6** 30s truncation guard | **P1** | Independent, small, removes silent data loss. |
-| 9 | **P1-5** beam tracker | **P1** | Most complex; wants good refs + confidence first. → **M2** |
-| 10 | **P2-1** word-level spans via CTC frame alignment | **P2** | Restores MISSED_WORD, currently absent in phoneme mode. |
-| 11 | **P2-2** speaker enrollment (personal references) | **P2** | Likely large win; natural extension of P0-1's variant list. |
-| 12 | **P2-3** true calibration (isotonic/Platt on `c_ctc`) | **P2** | Only then may the word "calibrated" be used. |
-| 13 | **P2-4** overlap-vs-smart-cut decision | **P2** | Decide from P1-7 data; do nothing unless it wins. |
-| 14 | **Surah 55 stress test** | **P2** | Post-M2 robustness only. |
+| 2 | **`M0-pre`** minimal as-is audio baseline | **P0-blocking** | **Must run BEFORE P1-8**, on the unmodified resampler, so the 1.56% sample-loss/aliasing fix can be quantified separately. Diagnostic only — not the thesis baseline (§6.1). |
+| 3 | **P1-8** worklet decimation | **P0-blocking** | Upstream of every measurement; sample loss + aliasing corrupts all downstream numbers. Frontend-only, so parallel with 5–6. Re-run the `M0-pre` set immediately after to get the delta. |
+| 4 | **`M0`** corpus + formal baseline | **P0** | The reference point for every gate. Measured after P1-7 **and** P1-8. |
+| 5 | **P0-1** multi-reference storage, then scoring-rule comparison | **P0** | Top suspect for the accuracy gap. Storage first; single vs min-CER vs consensus chosen on calibration/validation data. Pilot surahs only. Licensing verified before any public release. |
+| 6 | **P0-2** pilot rebuild + drop the unstable exclusion | **P0** | Depends on 5; removes the ayah-1 penalty. |
+| 7 | **P0-3** CTC posterior confidence | **P0** | Ship with `k_conf = 0` until fitted. Heuristic, not calibration. |
+| 8 | **P0-4** `no_match` + `UNCERTAIN` | **P0** | Needs 7 for `c_ctc`; makes failures visible. → **M1** |
+| 9 | **P1-6** 30s truncation guard | **P1** | Independent, small, removes silent data loss. |
+| 10 | **P1-5** beam tracker | **P1** | Most complex; wants good refs + confidence first. Sweep `B` (start 4, not a limit). → **M2** |
+| 11 | **P2-1** word-level spans via CTC frame alignment | **P2** | Restores MISSED_WORD; first point at which a word-level false-`WORD_OK` rate is meaningful. |
+| 12 | **P2-2** speaker enrollment (personal references) | **P2** | Likely large win; natural extension of P0-1's variant list. |
+| 13 | **P2-3** true calibration (isotonic/Platt on `c_ctc`) | **P2** | Only then may the word "calibrated" be used. |
+| 14 | **P2-4** phonetic similarity as a scoring feature | **P2** | Scorer-only; never touches canonical text or stored references. |
+| 15 | **P2-5** overlap-vs-smart-cut decision | **P2** | Decide from P1-7 data; do nothing unless it wins. |
+| 16 | **Surah 55 stress test** | **P2** | Post-M2 robustness only. |
 
 **Not on this list, by design:** anything in the Whisper path, making Groq primary,
 adding a `MUTASHABEH_PROVISIONAL` event type, changing `normalize.py`, replacing VAD
 smart cuts, or re-fixing one-ayah-per-window. See §1.
+
+**No other architectural change lands without measured evidence.** Anything not
+listed above requires a number from P1-7 instrumentation or the evaluation corpus
+before it is written.
