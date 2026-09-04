@@ -148,11 +148,17 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
     else:
         detector = _Detector()
 
-    counts = {"words_ok": 0, "ayahs_missed": 0, "jumps": 0}
+    counts = {"words_ok": 0, "ayahs_missed": 0, "jumps": 0, "uncertain": 0}
     detail: list[dict] = []
 
     def tally(events: list) -> None:
         for e in events:
+            # UNCERTAIN is a statement about our confidence, not a mistake by the
+            # reciter — count it for diagnostics but keep it out of `errors`.
+            if e.type == EventType.UNCERTAIN:
+                if e.state == EventState.PROVISIONAL:
+                    counts["uncertain"] += 1
+                continue
             if e.state != EventState.CONFIRMED:
                 continue
             if e.type == EventType.WORD_OK:
@@ -228,7 +234,7 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         if replay:
                             await ws.send_json({"type": "events", "events": [e.to_dict() for e in replay]})
                         continue
-                    events = tracker.feed(ids)
+                    events = tracker.feed(ids, c_ctc=res.c_ctc)
                     tally(events)
                     log.info("phoneme window %s", {**win, **tracker.last_diag})
                     if events:
@@ -236,6 +242,17 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                             "type": "events",
                             "events": [e.to_dict() for e in events],
                             "infer_ms": infer_ms,
+                        })
+                    if tracker.last_diag.get("outcome") == "no_match":
+                        # Transport-level signal so the UI can say "heard you but
+                        # cannot place you" instead of sitting on "listening"
+                        # forever. The verdict itself stays in the tracker.
+                        await ws.send_json({
+                            "type": "no_match",
+                            "c_ctc": res.c_ctc,
+                            "closest_cer": tracker.last_diag.get("closest_cer"),
+                            "closest_ayah": tracker.last_diag.get("closest_ayah"),
+                            "run": tracker.last_diag.get("no_match_run"),
                         })
 
             elif (text := msg.get("text")) is not None:
@@ -246,7 +263,7 @@ async def phoneme_ws(ws: WebSocket, session_id: str) -> None:
                         _res = model.recognize(s.audio)
                         _ids = _res.ids
                         _ms = int((time.perf_counter() - _t0) * 1000)
-                        ev = tracker.feed(_ids)
+                        ev = tracker.feed(_ids, c_ctc=_res.c_ctc)
                         tally(ev)
                         log.info("phoneme window %s", {
                             "session": session_id, "window_sec": round(s.duration, 2),
@@ -289,7 +306,10 @@ def _finalize(session_id: str, duration: float = 0.0, counts: dict | None = None
                 words_missed=0,                       # v1: MISSED_WORD intentionally disabled
                 ayahs_missed=c.get("ayahs_missed", 0),
                 jumps=c.get("jumps", 0),
-                detail={"errors": detail or [], "mode": "phoneme_v1"},
+                detail={"errors": detail or [], "mode": "phoneme_v1",
+                        # kept separate from `errors`: unplaced audio is our
+                        # uncertainty, not a mistake by the reciter (P0-4)
+                        "uncertain": c.get("uncertain", 0)},
             ))
             db.commit()
     finally:

@@ -8,6 +8,7 @@ import type { JumpAlert, RIQEvent, WordStatus } from '../types'
 export interface ReciteState {
   words: Map<number, WordStatus>          // ref idx -> status
   missedAyahs: Map<number, 'provisional' | 'confirmed'>  // ayah number -> state
+  uncertainAyahs: Set<number>             // heard but unplaceable (P0-4)
   jump: JumpAlert | null
   position: { surah: number; ayah: number; idx: number } | null
   provisionalIndex: Map<number, number>   // event_id -> ref idx (for revocation)
@@ -16,6 +17,7 @@ export interface ReciteState {
 export const initialState = (): ReciteState => ({
   words: new Map(),
   missedAyahs: new Map(),
+  uncertainAyahs: new Set(),
   jump: null,
   position: null,
   provisionalIndex: new Map(),
@@ -25,6 +27,7 @@ export function applyEvents(prev: ReciteState, events: RIQEvent[]): ReciteState 
   const s: ReciteState = {
     words: new Map(prev.words),
     missedAyahs: new Map(prev.missedAyahs),
+    uncertainAyahs: new Set(prev.uncertainAyahs),
     jump: prev.jump,
     position: prev.position,
     provisionalIndex: new Map(prev.provisionalIndex),
@@ -55,6 +58,15 @@ export function applyEvents(prev: ReciteState, events: RIQEvent[]): ReciteState 
         const ayah = e.payload.ayah as number
         if (e.state === 'revoked') s.missedAyahs.delete(ayah)
         else s.missedAyahs.set(ayah, e.state as 'provisional' | 'confirmed')
+        s.uncertainAyahs.delete(ayah)   // a real verdict supersedes uncertainty
+        break
+      }
+      case 'UNCERTAIN': {
+        // We heard audio we could not place. Amber, never red — and withdrawn
+        // as soon as the ayah does match.
+        const ayah = e.payload.ayah as number
+        if (e.state === 'revoked') s.uncertainAyahs.delete(ayah)
+        else s.uncertainAyahs.add(ayah)
         break
       }
       case 'MUTASHABEH_JUMP':

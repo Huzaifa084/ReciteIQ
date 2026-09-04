@@ -22,6 +22,8 @@ class EventType(StrEnum):
     REPEAT = "REPEAT"                    # benign rewind (D2); payload: from/to position
     PREAMBLE = "PREAMBLE"                # isti'adha/basmalah consumed (D7); payload: kind
     POSITION = "POSITION"                # current pointer for UI/resume; payload: word ref
+    UNCERTAIN = "UNCERTAIN"              # heard audio we could not place (P0-4); payload:
+                                         # surah, ayah, ayah_id — NEVER an error verdict
 
 
 class EventState(StrEnum):

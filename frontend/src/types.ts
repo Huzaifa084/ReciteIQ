@@ -29,12 +29,16 @@ export interface RIQEvent {
     | 'REPEAT'
     | 'PREAMBLE'
     | 'POSITION'
+    | 'UNCERTAIN'
   state: EventState
   payload: Record<string, any>
   refers_to?: number
 }
 
 export type WordStatus = 'pending' | 'ok' | 'missed-provisional' | 'missed'
+
+/** Heard but unplaceable — our uncertainty, never a verdict on the reciter. */
+export type AyahUncertainty = 'provisional'
 
 export interface JumpAlert {
   eventId: number

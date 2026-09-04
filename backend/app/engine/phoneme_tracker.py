@@ -42,6 +42,8 @@ class PhonemeTracker:
     # read by the session layer for logging. Never influences matching.
     last_diag: dict = field(default_factory=dict)
     _jump_prov: Event | None = None
+    _no_match_run: int = 0                          # consecutive windows that matched nothing
+    _uncertain: dict = field(default_factory=dict)  # ref idx -> its provisional UNCERTAIN event
 
     # ---- tuning (conservative) ----
     MATCH_CER_MAX = 0.45          # window must align to an ayah at least this well to count
@@ -50,14 +52,17 @@ class PhonemeTracker:
     CHAIN_MAX = 12                # max ayahs one window may cover
     CHAIN_SKIP_MAX = 2            # unmatched refs tolerated inside a chain
 
-    def feed(self, window_ids: list[int]) -> list[Event]:
+    def feed(self, window_ids: list[int], c_ctc: float | None = None) -> list[Event]:
         """Process one ≤30s window's collapsed token IDs.
 
         A window is bounded by time, not by ayah, so it routinely spans SEVERAL
         consecutive ayahs. We therefore chain-align consecutive references onto
-        successive spans of the window and credit every ayah the window actually
-        covered — only the ayahs the reciter genuinely skipped over are reported
-        missed.
+        successive spans of the window and credit every ayah the window covered.
+
+        A miss is only ever claimed on POSITIVE evidence that the reciter moved
+        on — an ayah skipped over *inside* a window that otherwise aligned well.
+        Ayahs spanned by windows we simply could not place are UNCERTAIN, never
+        MISSED_AYAH: absence of a match is not evidence of a skip (P0-4).
         """
         events: list[Event] = []
         self.last_diag = {"n_ids": len(window_ids), "pointer": self.pointer}
@@ -68,6 +73,7 @@ class PhonemeTracker:
         chain = self._chain(window_ids)
         self.last_diag["chain_len"] = len(chain)
         self.last_diag["matched_ayahs"] = [self.ref[i].number for i in chain]
+        low_conf = c_ctc is not None and c_ctc < settings.phoneme_conf_floor
         if chain:
             self._clear_jump(events)
             matched = {i for i in chain}
@@ -75,24 +81,44 @@ class PhonemeTracker:
             if first < self.pointer:
                 events.append(Event(EventType.REPEAT, EventState.CONFIRMED,
                                     {**self.ref[first].word_refs[0], "from_idx": self.pointer}))
-            # Skipped = inside the covered span but never aligned (leading gap
-            # before the first match, or a hole between two matches).
+            # An unaligned ayah inside the covered span splits two ways:
+            #
+            #  * BETWEEN two matched ayahs of this window (first < k < last): the
+            #    window covered that stretch of audio and the ayah still did not
+            #    align, so the reciter demonstrably moved past it. A real miss.
+            #  * BEFORE the first match (k < first), reached across windows we
+            #    could not place at all: we heard speech and failed to place it,
+            #    which says nothing about whether it was recited. UNCERTAIN.
+            #
+            # Live-caught: a take that recited all 7 ayahs of Al-Fatihah chained
+            # only [4] and [6], and the old rule turned ayahs 1, 2, 3 and 5 red.
+            unplaced = self._no_match_run > 0 or low_conf
             for k in range(self.pointer, last):
-                if k not in matched and k not in self._recited:
-                    a = self.ref[k]
+                if k in matched or k in self._recited:
+                    continue
+                a = self.ref[k]
+                if k < first and unplaced:
+                    self._mark_uncertain(k, events)
+                else:
                     events.append(Event(EventType.MISSED_AYAH, EventState.CONFIRMED,
                                         {"surah": a.surah, "ayah": a.number, "ayah_id": a.ayah_id}))
             for i in chain:
                 self._confirm_ayah(i, events)
+            self._no_match_run = 0
             self.pointer = last + 1
             cur = self.ref[min(self.pointer, len(self.ref) - 1)]
             events.append(Event(EventType.POSITION, EventState.CONFIRMED, cur.word_refs[0]))
             self.last_diag["outcome"] = "chained"
             return events
 
-        # Nothing in the local band aligned → consult global index for a jump
+        # Nothing aligned → consult the global index for a jump, then surface the
+        # uncertainty instead of staying silent (P0-4).
         self.last_diag["outcome"] = "no_match"
+        self._no_match_run += 1
+        self.last_diag["no_match_run"] = self._no_match_run
         self._check_jump(window_ids, events)
+        if self._no_match_run >= settings.phoneme_uncertain_after:
+            self._mark_uncertain(self.pointer, events)
         return events
 
     # ---------------------------------------------------------------- internals
@@ -171,9 +197,26 @@ class PhonemeTracker:
                     best = (cer, start, start + ln)
         return best
 
+    def _mark_uncertain(self, i: int, events: list[Event]) -> None:
+        """Flag an ayah as heard-but-unplaced. PROVISIONAL by construction — it is
+        a statement about our own confidence, never a verdict on the reciter."""
+        if i in self._uncertain or i in self._recited or not 0 <= i < len(self.ref):
+            return
+        a = self.ref[i]
+        ev = Event(EventType.UNCERTAIN, EventState.PROVISIONAL,
+                   {"surah": a.surah, "ayah": a.number, "ayah_id": a.ayah_id})
+        self._uncertain[i] = ev
+        events.append(ev)
+
+    def _clear_uncertain(self, i: int, events: list[Event]) -> None:
+        if (ev := self._uncertain.pop(i, None)) is not None:
+            events.append(Event(EventType.UNCERTAIN, EventState.REVOKED,
+                                ev.payload, refers_to=ev.event_id))
+
     def _confirm_ayah(self, i: int, events: list[Event]) -> None:
         if i in self._recited:
             return
+        self._clear_uncertain(i, events)   # a later match resolves it for the reciter
         self._recited.add(i)
         # soft progress: whole-ayah green (NOT a word-level judgement)
         for wr in self.ref[i].word_refs:

@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     phoneme_detect_score_min: float = 0.45     # location lock score floor
     phoneme_detect_margin: float = 0.18        # top-1 vs top-2 margin to lock
     phoneme_detect_consensus: int = 2          # consecutive agreeing windows to lock
+
+    # --- P0-4: uncertainty rather than false verdicts ---
+    # Live-measured on an amateur take: 10/12 windows returned no_match with the
+    # model CONFIDENT (c_ctc 0.68-0.93) and healthy input, so a failure to match
+    # is not evidence the reciter skipped anything.
+    phoneme_uncertain_after: int = 2           # consecutive no-match windows before flagging
+    phoneme_conf_floor: float = 0.35           # c_ctc below this: never claim a miss
     asr_model_path: str = "models/whisper-base-ar-quran-ct2"
     asr_compute_type: str = "int8"
     asr_cpu_threads: int = 2                   # per-inference threads

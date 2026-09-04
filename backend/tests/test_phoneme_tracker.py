@@ -169,3 +169,66 @@ def test_diag_flags_too_short_window(ref78):
     tr = PhonemeTracker(ref=ref78)
     assert tr.feed([1, 2]) == []
     assert tr.last_diag["outcome"] == "too_short"
+
+
+# ---- P0-4: absence of a match is not evidence of a skip -------------------
+
+def test_unplaced_windows_yield_uncertain_not_missed(ref78):
+    """THE bug this fixes. A live take recited all 7 ayahs of Al-Fatihah; the
+    tracker chained only [4] and [6] and turned ayahs 1, 2, 3, 5 red. Windows we
+    cannot place say nothing about whether the reciter recited them."""
+    import random
+    tr = PhonemeTracker(ref=ref78)
+    rng = random.Random(3)
+    # two windows we cannot place at all (as in the live session)
+    for _ in range(2):
+        tr.feed([rng.randint(1, 38) for _ in range(30)])
+    # now a window that aligns to a LATER ayah
+    ev = tr.feed(ref78[3].ids)
+    assert not types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED), \
+        "ayahs spanned by unplaced windows must never be reported missed"
+    unc = types(ev, EventType.UNCERTAIN, EventState.PROVISIONAL)
+    assert unc, "the skipped-over span should be surfaced as UNCERTAIN"
+    assert {u.payload["ayah"] for u in unc} <= {a.number for a in ref78[:3]}
+
+
+def test_real_skip_inside_one_window_is_still_missed(ref78):
+    """The fix must not blind us to a genuine skip: when ONE window covers the
+    audio and an interior ayah fails to align, the reciter did move past it."""
+    tr = PhonemeTracker(ref=ref78)
+    window = ref78[0].ids + ref78[1].ids + ref78[3].ids      # ayah 3 skipped
+    ev = tr.feed(window)
+    missed = types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)
+    assert len(missed) == 1 and missed[0].payload["ayah"] == ref78[2].number
+    assert not types(ev, EventType.UNCERTAIN, EventState.PROVISIONAL)
+
+
+def test_uncertain_revoked_when_ayah_later_matches(ref78):
+    """Resolve in the reciter's favour: an ayah flagged uncertain that later
+    aligns must have its flag withdrawn."""
+    import random
+    tr = PhonemeTracker(ref=ref78)
+    rng = random.Random(5)
+    for _ in range(2):
+        tr.feed([rng.randint(1, 38) for _ in range(30)])
+    ev = tr.feed(ref78[0].ids)                # ayah 1 arrives after the confusion
+    assert types(ev, EventType.UNCERTAIN, EventState.REVOKED) or \
+        not types(ev, EventType.UNCERTAIN, EventState.PROVISIONAL)
+    assert not types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)
+
+
+def test_uncertain_is_debounced(ref78):
+    """A single unplaced window must not flag anything — only a run does."""
+    import random
+    tr = PhonemeTracker(ref=ref78)
+    rng = random.Random(11)
+    ev = tr.feed([rng.randint(1, 38) for _ in range(30)])
+    assert not types(ev, EventType.UNCERTAIN, EventState.PROVISIONAL)
+
+
+def test_low_confidence_blocks_missed_ayah(ref78):
+    """With c_ctc under the floor the model barely heard anything placeable, so
+    a leading gap must be uncertain even without a prior no-match run."""
+    tr = PhonemeTracker(ref=ref78)
+    ev = tr.feed(ref78[3].ids, c_ctc=0.05)
+    assert not types(ev, EventType.MISSED_AYAH, EventState.CONFIRMED)

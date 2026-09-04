@@ -602,6 +602,17 @@ select:focus {
 .ayah-missed-provisional .word.word-pending {
   color: var(--amber);
 }
+/* P0-4: heard but unplaceable. Deliberately distinct from missed — a dotted
+   amber underline reads as "still checking", not as a mistake. */
+.legend .i-unplaced {
+  background: transparent;
+  border: 1px solid var(--amber);
+}
+.ayah-uncertain .word.word-pending {
+  color: var(--amber);
+  text-decoration: underline dotted;
+  text-underline-offset: 6px;
+}
 
 .detecting-hint {
   display: flex;

@@ -12,6 +12,8 @@ export interface WSCallbacks {
   onStatusChange: (s: 'connecting' | 'open' | 'closed') => void
   /** Auto-detect resolved: the backend locked onto this location. */
   onDetected?: (surah: number, ayah: number) => void
+  /** Backend heard audio but could not place it (P0-4). */
+  onNoMatch?: (info: { c_ctc: number | null; closest_cer: number | null; run: number }) => void
 }
 
 export class SessionSocket {
@@ -53,6 +55,8 @@ export class SessionSocket {
         this.cb.onEvents(msg.events)
       } else if (msg.type === 'detected') {
         this.cb.onDetected?.(msg.surah, msg.ayah)
+      } else if (msg.type === 'no_match') {
+        this.cb.onNoMatch?.({ c_ctc: msg.c_ctc ?? null, closest_cer: msg.closest_cer ?? null, run: msg.run ?? 1 })
       } else if (msg.type === 'ended') {
         this.closedByUs = true
         this.cb.onEnded(msg.reason)

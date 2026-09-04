@@ -23,12 +23,13 @@ export function MushafView({ ayahs, state }: { ayahs: DisplayAyah[]; state: Reci
     <div className="mushaf" dir="rtl">
       {ayahs.map((a) => {
         const ayahMissed = state.missedAyahs.get(a.ayah)
+        const ayahUncertain = !ayahMissed && state.uncertainAyahs.has(a.ayah)
         return (
           <span
             key={a.ayah}
             className={`ayah ${ayahMissed ? `ayah-missed-${ayahMissed}` : ''} ${
-              state.position?.ayah === a.ayah ? 'ayah-current' : ''
-            }`}
+              ayahUncertain ? 'ayah-uncertain' : ''
+            } ${state.position?.ayah === a.ayah ? 'ayah-current' : ''}`}
           >
             {a.words.map((w) => {
               const idx = idxOf.get(`${a.ayah}:${w.position}`)!

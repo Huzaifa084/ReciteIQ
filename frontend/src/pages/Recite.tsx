@@ -37,6 +37,7 @@ export function Recite({
     'starting',
   )
   const [detectedSurah, setDetectedSurah] = useState<number | null>(auto ? null : surahId)
+  const [noMatchRun, setNoMatchRun] = useState(0)   // P0-4: consecutive unplaced windows
   const [error, setError] = useState('')
   const sockRef = useRef<SessionSocket | null>(null)
   const recRef = useRef<Recorder | null>(null)
@@ -64,7 +65,11 @@ export function Recite({
         sessionRef.current = session.session_id
 
         const sock = new SessionSocket(session.session_id, {
-          onEvents: (events) => setState((prev) => applyEvents(prev, events)),
+          onEvents: (events) => {
+            setState((prev) => applyEvents(prev, events))
+            setNoMatchRun(0)      // anything placed clears the warning
+          },
+          onNoMatch: (info) => setNoMatchRun(info.run || 1),
           onDetected: (surah, ayah) => {
             setDetectedSurah(surah)
             api.surahText(surah, ayah).then((t) => {
@@ -128,7 +133,9 @@ export function Recite({
   const pillClass =
     status === 'live' ? 'live' : status === 'muted' ? 'muted' : status === 'detecting' ? 'detecting' : ''
   const pillText =
-    status === 'live'
+    status === 'live' && noMatchRun >= 2
+      ? "can't place you"
+      : status === 'live'
       ? 'listening'
       : status === 'detecting'
         ? 'detecting location…'
@@ -208,8 +215,18 @@ export function Recite({
           <span><i className="i-ok" /> recited</span>
           <span><i className="i-missed" /> missed</span>
           <span><i className="i-checking" /> checking…</span>
+          <span><i className="i-unplaced" /> unplaced (still listening)</span>
           <span><i className="i-current" /> current position</span>
         </footer>
+      )}
+      {status === 'live' && noMatchRun >= 2 && (
+        <div className="detecting-hint">
+          <span>
+            Hearing you, but not able to line it up with the text yet — carry on
+            reciting, or check the Surah is the one you meant. Nothing here is being
+            marked as a mistake.
+          </span>
+        </div>
       )}
     </div>
   )
