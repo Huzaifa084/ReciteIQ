@@ -82,7 +82,11 @@ class StreamSegmenter:
         self._max_samples = int(max_sec * settings.sample_rate)
         self._overlap_samples = int(settings.segment_overlap_sec * settings.sample_rate)
         self._silence_cut = int(silence_cut_sec * settings.sample_rate)
-        self._quiet_lookback = int(1.5 * settings.sample_rate)  # smart-cut search window
+        self._quiet_lookback = int(settings.segment_quiet_lookback_sec * settings.sample_rate)
+        # A smart cut must still leave a segment worth transcribing. This floor
+        # is about the ASR's minimum, NOT about the overlap length — tying it to
+        # the overlap made a longer overlap silently disable smart cuts.
+        self._min_segment_samples = int(settings.asr_min_segment_sec * settings.sample_rate)
 
     def feed(self, pcm_s16le: bytes) -> list[Segment]:
         """Feed raw PCM bytes; return zero or more completed speech segments."""
@@ -128,7 +132,7 @@ class StreamSegmenter:
     def _cut(self, forced: bool) -> Segment:
         cut_at = len(self._buf)
         smart = False
-        if forced and self._quiet_pos >= len(self._buf) - self._quiet_lookback and self._quiet_pos > self._overlap_samples:
+        if forced and self._quiet_pos >= len(self._buf) - self._quiet_lookback and self._quiet_pos > self._min_segment_samples:
             # Smart cut: slice at the most recent low-probability window — a
             # likely word boundary — instead of blindly mid-speech. Slicing a
             # word in half makes Whisper drop it on BOTH sides, which is how a

@@ -105,12 +105,24 @@ class Settings(BaseSettings):
     # --- VAD / segmentation (D4: hard cap kills the long-segment latency cliff) ---
     vad_threshold: float = 0.5
     segment_max_sec: float = 5.0
-    segment_overlap_sec: float = 0.5
+    # A hard cut through a word makes the ASR drop it on BOTH sides, so the word
+    # is reported missed on a clean recitation (live-caught on الرحيم, and again
+    # on Al-Inshiqaq 15 بصيرا). The overlap must therefore be long enough to
+    # carry a WHOLE word into the next segment: at ~1.3 words/sec of measured
+    # tajweed recitation, 0.5s was half a word.
+    segment_overlap_sec: float = 1.5
+    # How far back a forced cut may search for a low-VAD-probability instant to
+    # slice at instead. A clean boundary beats overlap+dedup, so search wider.
+    segment_quiet_lookback_sec: float = 3.0
     silence_cut_sec: float = 0.7               # trailing silence that closes a natural segment
 
     # --- Alignment / detection tunables (tuned in Phase 6 against the eval harness) ---
     match_score_min: int = 78                  # rapidfuzz ratio (0-100) to accept a word match
     confirm_window_k: int = 3                  # matches needed to confirm a MISSED_WORD
+    # Similarity at which an UNMATCHED asr token is taken to be an attempt at a
+    # gap word, so that word is "recited badly" rather than "skipped". Below
+    # match_score_min on purpose: these tokens were already rejected as matches.
+    garbled_attribution_min: int = 55
     align_window_fwd: int = 12                 # words ahead of pointer considered
     align_window_back: int = 8                 # words behind pointer (repetition, D2)
     pause_grace_sec: float = 4.0               # "wait and listen" before MISSED_AYAH can confirm

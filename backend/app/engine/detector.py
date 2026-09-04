@@ -77,8 +77,41 @@ class RecitationTracker:
         self._ayah_word_count: dict[int, int] = {}
         for w in ref:
             self._ayah_word_count[w.ayah_id] = self._ayah_word_count.get(w.ayah_id, 0) + 1
+        # QUL word units are not always one whitespace token: the vocative
+        # يَا أَيُّهَا is ONE unit with one word_id and one UI cell, but every ASR
+        # emits it as two tokens. Rare (3 of 665 words across the curated
+        # surahs) and it lands on Al-Kafirun 1 and Al-Inshiqaq 6.
+        self._multiword: list[str] = sorted({w.norm for w in ref if " " in w.norm})
 
     # ------------------------------------------------------------------ API
+
+    def _merge_multiword(self, tokens: list[str]) -> list[str]:
+        """Join adjacent ASR tokens that a multi-word reference unit expects as one.
+
+        Only a pair whose JOIN closely matches an actual multi-word unit of this
+        session's reference is merged, so this cannot invent merges: the surahs
+        that have no such unit are untouched, and a reciter who says only "يا"
+        still produces one unmatched token. Without it neither half of
+        يَا أَيُّهَا matched (best 72.7 against a threshold of 78) and the unit
+        stayed uncredited on a perfectly clean recitation.
+        """
+        if not self._multiword or len(tokens) < 2:
+            return tokens
+        from rapidfuzz import fuzz
+
+        out: list[str] = []
+        i = 0
+        while i < len(tokens):
+            if i + 1 < len(tokens):
+                joined = f"{tokens[i]} {tokens[i + 1]}"
+                if any(fuzz.ratio(joined, u) >= settings.match_score_min
+                       for u in self._multiword):
+                    out.append(joined)
+                    i += 2
+                    continue
+            out.append(tokens[i])
+            i += 1
+        return out
 
     def _prepass_hits(self, tokens: list[str]) -> int:
         """Count how many segment tokens follow the reference, dry-running the
@@ -112,6 +145,7 @@ class RecitationTracker:
         events: list[Event] = []
         if forced_cut:
             tokens = self._dedup_overlap(tokens)
+        tokens = self._merge_multiword(tokens)
 
         # Segment-level pre-pass: a predominantly off-reference segment is
         # treated as a block — no per-token advance/rewind. Without this, a
@@ -137,7 +171,7 @@ class RecitationTracker:
                 self._rewind_candidate = None  # only the very next token corroborates
                 continue
             segment_matched_any = True
-            garbled = len(self.unmatched_streak)  # unmatched tokens consumed since last match
+            garbled = list(self.unmatched_streak)  # unmatched tokens consumed since last match
             self.unmatched_streak.clear()
             if self._preamble_active:
                 self._preamble_active = False  # real recitation has begun
@@ -202,15 +236,15 @@ class RecitationTracker:
                 return True
         return False
 
-    def _advance(self, m: Match, events: list[Event], *, garbled: int = 0) -> None:
+    def _advance(self, m: Match, events: list[Event], *, garbled: list[str] | None = None) -> None:
         # Gap words between pointer and the match become provisional misses,
         # aggregated to MISSED_AYAH when a complete ayah is skipped.
-        # Garbled-token credit: each unmatched token consumed since the last
-        # match represents an *attempted* word the ASR mangled — those gap
-        # words were (badly) recited, not skipped, so they raise nothing.
+        # Garbled-token credit: an unmatched token consumed since the last match
+        # is evidence the reciter SAID something there, so the word it was
+        # attempting was (badly) recited rather than skipped.
         gap = [self.ref[i] for i in range(self.pointer, m.idx) if i not in self.matched]
-        if garbled:
-            gap = gap[garbled:]
+        if gap and garbled:
+            gap = self._unattributed(gap, garbled)
         if gap:
             self._emit_gap(gap, resumed_at=self.ref[m.idx], events=events)
         w = self.ref[m.idx]
@@ -221,6 +255,39 @@ class RecitationTracker:
         )
         self.pointer = m.idx + 1
         self._tick_confirmations(events)
+
+    def _unattributed(self, gap: list[RefWord], garbled: list[str]) -> list[RefWord]:
+        """Gap words that no unmatched token can account for — the real misses.
+
+        The credit used to be positional: drop the first len(garbled) gap words,
+        whatever they were. That was wrong in both directions. It ABSOLVED a
+        genuinely skipped word whenever the ASR happened to mangle something
+        nearby (Al-Kafirun: the dropped word went unreported), and it BLAMED the
+        wrong word when the mangled one was not first in the gap (Al-Inshiqaq:
+        a MISSED_WORD on a clean recitation).
+
+        Pair each unmatched token with the gap word it most resembles instead.
+        A token only absolves a word it actually sounds like, and absolves at
+        most one — so a skipped word with no lookalike token is still reported.
+        The pairing threshold is deliberately BELOW `match_score_min`: these are
+        tokens already rejected as matches, and the question here is the weaker
+        "was this an attempt at that word", not "is this that word".
+        """
+        from rapidfuzz import fuzz
+
+        pool = list(garbled)
+        unblamed: list[RefWord] = []
+        for w in gap:
+            best_i, best_score = None, 0.0
+            for i, tok in enumerate(pool):
+                score = fuzz.ratio(tok, w.norm)
+                if score > best_score:
+                    best_i, best_score = i, score
+            if best_i is not None and best_score >= settings.garbled_attribution_min:
+                pool.pop(best_i)      # one token accounts for at most one word
+            else:
+                unblamed.append(w)
+        return unblamed
 
     def _recover(self, m: Match, events: list[Event]) -> None:
         """Late match on a word previously called missed: withdraw the verdict
@@ -392,17 +459,20 @@ class RecitationTracker:
 
     def _dedup_overlap(self, tokens: list[str]) -> list[str]:
         """Drop leading tokens that duplicate the words just matched (forced-cut
-        overlap, D4). At most 2 tokens — the 0.5s overlap can't hold more."""
+        overlap, D4). Bounded by how many words the overlap can actually hold:
+        at ~1.3 words/sec of measured recitation a 1.5s overlap is ~2 words, so
+        allow 3 with margin."""
         from rapidfuzz import fuzz
 
+        max_drop = max(2, int(settings.segment_overlap_sec * 2) + 1)
         recent = [
             self.ref[i].norm
-            for i in (self.pointer - 2, self.pointer - 1)
-            if i >= 0 and i in self.matched
+            for i in range(max(0, self.pointer - max_drop), self.pointer)
+            if i in self.matched
         ]
         expected = self.ref[self.pointer].norm if self.pointer < len(self.ref) else ""
         dropped = 0
-        while tokens and dropped < 2 and recent:
+        while tokens and dropped < max_drop and recent:
             recent_score = max(fuzz.ratio(tokens[0], r) for r in recent)
             # Only a *better* match against the just-matched words than against
             # the expected next word counts as overlap residue — adjacent ayahs

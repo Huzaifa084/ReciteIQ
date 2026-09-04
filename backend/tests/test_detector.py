@@ -144,15 +144,39 @@ def test_rahman_refrain_run(ref_rahman):
 # ------------------------------------------------------------- ASR noise D5
 
 
-def test_single_garbled_token_no_error(ref_fatiha):
-    # ASR mangles one word beyond recognition: attempted ≠ skipped → no events
+def test_mangled_token_resembling_the_word_is_not_an_error(ref_fatiha):
+    """A token the ASR mangled but that still resembles the expected word is an
+    attempt, not a skip — it must raise nothing."""
     tr = RecitationTracker(ref_fatiha, preamble=False)
     feed_ayahs(tr, ref_fatiha, range(1, 6))
     toks = tokens_of(ref_fatiha, 6)
-    toks[1] = "زقزقزق"  # unrecognizable garbage in place of a real word
+    real = toks[1]
+    toks[1] = real[:-1] + "ق"          # close to the real word, below match threshold
     ev = tr.feed_segment(toks)
     ev += tr.feed_segment(tokens_of(ref_fatiha, 7))
     assert not types(ev, EventType.MISSED_WORD)
+    assert not types(ev, EventType.MISSED_AYAH)
+
+
+def test_token_resembling_nothing_is_reported(ref_fatiha):
+    """A token that resembles NO gap word is reported.
+
+    This reverses the old positional rule, deliberately. That rule dropped the
+    first N gap words whatever they sounded like, which absolved a genuinely
+    skipped word whenever the ASR mangled anything nearby — the reciter said
+    something that is not the expected word and heard nothing back. From text
+    alone a substitution and an ASR failure are indistinguishable, so this is a
+    judgement call about which error costs more in a Sami; with FastConformer at
+    WER 0.04 an unrecognisable token is far more likely to be a real mistake
+    than a transcription failure, and a missed correction is the worse outcome.
+    """
+    tr = RecitationTracker(ref_fatiha, preamble=False)
+    feed_ayahs(tr, ref_fatiha, range(1, 6))
+    toks = tokens_of(ref_fatiha, 6)
+    toks[1] = "زقزقزق"  # resembles nothing in the reference
+    ev = tr.feed_segment(toks)
+    ev += tr.feed_segment(tokens_of(ref_fatiha, 7))
+    assert types(ev, EventType.MISSED_WORD, EventState.CONFIRMED)
     assert not types(ev, EventType.MISSED_AYAH)
 
 
