@@ -82,6 +82,11 @@ class RecitationTracker:
         # emits it as two tokens. Rare (3 of 665 words across the curated
         # surahs) and it lands on Al-Kafirun 1 and Al-Inshiqaq 6.
         self._multiword: list[str] = sorted({w.norm for w in ref if " " in w.norm})
+        # Words matched during the previous segment. A forced cut replays the end
+        # of that segment, so a backward match landing in this set is overlap
+        # residue rather than a restart.
+        self._prev_segment_matched: set[int] = set()
+        self._this_segment_matched: set[int] = set()
 
     # ------------------------------------------------------------------ API
 
@@ -174,6 +179,8 @@ class RecitationTracker:
                     events.append(Event(EventType.POSITION, EventState.CONFIRMED, cur.ref()))
                 return events
 
+        self._prev_segment_matched = self._this_segment_matched
+        self._this_segment_matched = set()
         segment_matched_any = False
         for token in tokens:
             if overlap_guard > 0:
@@ -203,8 +210,13 @@ class RecitationTracker:
                 # a lone stray match must not rewind (live-caught: spurious
                 # REPEAT then false misses right after auto-detect replay).
                 cand = self._rewind_candidate
-                if overlap_guard > 0:
-                    # still inside the replayed span — residue, not a restart
+                if overlap_guard > 0 or (forced_cut and m.idx in self._prev_segment_matched):
+                    # Residue, not a restart. A token count alone was not enough:
+                    # the replayed words can land past it when the ASR renders
+                    # them differently the second time, which is how a clean
+                    # Al-Inshiqaq produced a REPEAT rewinding 3 words. What the
+                    # overlap can possibly contain is the PREVIOUS segment's own
+                    # words, so that is the bound.
                     self._rewind_candidate = None
                 elif cand is not None and 1 <= m.idx - cand.idx <= 2:
                     self._rewind_candidate = None
@@ -267,6 +279,7 @@ class RecitationTracker:
             self._emit_gap(gap, resumed_at=self.ref[m.idx], events=events)
         w = self.ref[m.idx]
         self.matched.add(m.idx)
+        self._this_segment_matched.add(m.idx)
         self._revoke_if_recovered(m.idx, events)
         events.append(
             Event(EventType.WORD_OK, EventState.CONFIRMED, {**w.ref(), "score": round(m.score, 1)})

@@ -100,6 +100,7 @@ class LiveSession:
         self.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
                        "repeats": 0, "uncertain": 0}
         self.no_match_run = 0        # consecutive windows we heard but could not place
+        self._ok_idx: set[int] = set()   # distinct reference words confirmed
         self.detail: list[dict] = []
 
     def _init_tracker(self, surah_id: int, start_ayah: int, *, preamble: bool) -> None:
@@ -152,7 +153,11 @@ class LiveSession:
         for e in events:
             if e.state.value == "confirmed":
                 if e.type == EventType.WORD_OK:
-                    self.counts["words_ok"] += 1
+                    # DISTINCT words, not WORD_OK events: a rewind clears the
+                    # matched set so the re-recited words are credited again, and
+                    # counting events reported 109 words for a 107-word surah.
+                    self._ok_idx.add(e.payload.get("idx"))
+                    self.counts["words_ok"] = len(self._ok_idx)
                 elif e.type in self._COUNT_KEY:
                     self.counts[self._COUNT_KEY[e.type]] += 1
                     self.detail.append(e.to_dict())

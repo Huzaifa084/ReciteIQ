@@ -25,6 +25,7 @@ def test_counts_separate_every_category(ref_fatiha):
     live.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
                    "repeats": 0, "uncertain": 0}
     live.detail = []
+    live._ok_idx = set()
     live.record([
         _ev(EventType.WORD_OK, idx=0),
         _ev(EventType.WORD_OK, idx=1),
@@ -45,6 +46,7 @@ def test_benign_events_are_not_filed_as_errors(ref_fatiha):
     live.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
                    "repeats": 0, "uncertain": 0}
     live.detail = []
+    live._ok_idx = set()
     live.record([
         _ev(EventType.REPEAT, idx=1),
         _ev(EventType.UNCERTAIN, ayah=4),
@@ -54,11 +56,25 @@ def test_benign_events_are_not_filed_as_errors(ref_fatiha):
     assert live.counts["uncertain"] == 1
 
 
+def test_words_ok_counts_distinct_words(ref_fatiha):
+    """A rewind clears the matched set, so the re-recited words are credited
+    again. Counting WORD_OK events reported 109 words for a 107-word surah."""
+    live = LiveSession.__new__(LiveSession)
+    live.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
+                   "repeats": 0, "uncertain": 0}
+    live.detail = []
+    live._ok_idx = set()
+    live.record([_ev(EventType.WORD_OK, idx=i) for i in (0, 1, 2)])
+    live.record([_ev(EventType.WORD_OK, idx=i) for i in (1, 2, 3)])   # ayah repeated
+    assert live.counts["words_ok"] == 4
+
+
 def test_provisional_events_are_not_counted(ref_fatiha):
     live = LiveSession.__new__(LiveSession)
     live.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
                    "repeats": 0, "uncertain": 0}
     live.detail = []
+    live._ok_idx = set()
     live.record([
         _ev(EventType.MISSED_WORD, EventState.PROVISIONAL, idx=2),
         _ev(EventType.REPEAT, EventState.PROVISIONAL, idx=1),
