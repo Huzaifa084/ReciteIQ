@@ -759,6 +759,10 @@ select:focus {
 }
 .stat.ok strong { color: var(--green); }
 .stat.bad strong { color: var(--red); }
+/* Neither is an error: a repeat is normal recitation, and unplaced audio is our
+   uncertainty. Amber at most, never red. */
+.stat.neutral strong { color: var(--text); }
+.stat.uncertain strong { color: var(--amber); }
 
 .error-list {
   list-style: none;

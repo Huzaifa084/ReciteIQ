@@ -159,4 +159,9 @@ class SessionSummary(Base):
     words_missed: Mapped[int] = mapped_column(Integer, default=0)
     ayahs_missed: Mapped[int] = mapped_column(Integer, default=0)
     jumps: Mapped[int] = mapped_column(Integer, default=0)
+    # Benign, not errors — but the summary must still distinguish them, or a
+    # reciter who restarted an ayah sees the same screen as one who recited it
+    # once, and unplaced audio looks like a clean run.
+    repeats: Mapped[int] = mapped_column(Integer, default=0)
+    uncertain: Mapped[int] = mapped_column(Integer, default=0)
     detail: Mapped[dict] = mapped_column(JSONB, default=dict)  # per-error positions for the summary view

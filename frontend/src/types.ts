@@ -54,5 +54,8 @@ export interface SessionSummaryData {
   words_missed: number
   ayahs_missed: number
   jumps: number
+  /** Benign, never counted as errors — see the note in Summary.tsx. */
+  repeats: number
+  uncertain: number
   errors: Record<string, any>[]
 }

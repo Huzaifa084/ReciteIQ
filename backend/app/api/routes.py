@@ -106,6 +106,8 @@ def get_summary(session_id: uuid.UUID, db: DBSession = Depends(get_db)):
             "words_missed": summary.words_missed,
             "ayahs_missed": summary.ayahs_missed,
             "jumps": summary.jumps,
+            "repeats": summary.repeats,
+            "uncertain": summary.uncertain,
             "errors": summary.detail.get("errors", []),
         },
     }

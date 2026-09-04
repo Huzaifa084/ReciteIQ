@@ -97,7 +97,8 @@ class LiveSession:
         self.started = time.monotonic()
         self.last_frame = time.monotonic()
         self.bytes_received = 0
-        self.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0}
+        self.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
+                       "repeats": 0, "uncertain": 0}
         self.detail: list[dict] = []
 
     def _init_tracker(self, surah_id: int, start_ayah: int, *, preamble: bool) -> None:
@@ -154,6 +155,10 @@ class LiveSession:
                 elif e.type in self._COUNT_KEY:
                     self.counts[self._COUNT_KEY[e.type]] += 1
                     self.detail.append(e.to_dict())
+                elif e.type == EventType.REPEAT:
+                    self.counts["repeats"] += 1      # benign: counted, never an error
+                elif e.type == EventType.UNCERTAIN:
+                    self.counts["uncertain"] += 1
             elif e.state.value == "revoked" and e.type in self._COUNT_KEY:
                 # late-match revocation withdraws an earlier confirmed verdict
                 before = len(self.detail)
@@ -380,7 +385,8 @@ def finalize_session(session_id: uuid.UUID) -> None:
             events = db.execute(
                 select(SessionEvent).where(SessionEvent.session_id == session_id)
             ).scalars().all()
-            counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0}
+            counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
+                      "repeats": 0, "uncertain": 0}
             detail = []
             for e in events:
                 if e.payload.get("state") != "confirmed":
@@ -396,6 +402,10 @@ def finalize_session(session_id: uuid.UUID) -> None:
                 elif e.type == "MUTASHABEH_JUMP":
                     counts["jumps"] += 1
                     detail.append(e.payload)
+                elif e.type == "REPEAT":
+                    counts["repeats"] += 1     # benign: counted, never an error
+                elif e.type == "UNCERTAIN":
+                    counts["uncertain"] += 1
             row.status = "ended"
             row.ended_at = datetime.now(timezone.utc)
             # An aggregation that found nothing is not evidence the session was

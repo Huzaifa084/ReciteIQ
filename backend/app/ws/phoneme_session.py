@@ -366,10 +366,11 @@ def _finalize(session_id: str, duration: float = 0.0, counts: dict | None = None
                 words_missed=0,                       # v1: MISSED_WORD intentionally disabled
                 ayahs_missed=c.get("ayahs_missed", 0),
                 jumps=c.get("jumps", 0),
-                detail={"errors": detail or [], "mode": "phoneme_v1",
-                        # kept separate from `errors`: unplaced audio is our
-                        # uncertainty, not a mistake by the reciter (P0-4)
-                        "uncertain": c.get("uncertain", 0)},
+                repeats=c.get("repeats", 0),
+                # kept OUT of `errors`: unplaced audio is our uncertainty, not a
+                # mistake by the reciter (P0-4)
+                uncertain=c.get("uncertain", 0),
+                detail={"errors": detail or [], "mode": "phoneme_v1"},
             ))
             db.commit()
     finally:

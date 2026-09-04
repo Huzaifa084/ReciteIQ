@@ -61,7 +61,11 @@ export function Summary({
   const attempted = s ? s.words_ok + s.words_missed : 0
   // No recitation captured at all → not "flawless", just empty (the screenshot bug)
   const empty = !s || attempted === 0
-  const clean = s && !empty && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0
+  // Repeats do not spoil a recitation, so they never block "flawless". Unplaced
+  // audio does: we cannot claim a flawless run over a stretch we never matched.
+  const clean =
+    s && !empty && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0 &&
+    s.uncertain === 0
   const issues = s ? s.words_missed + s.ayahs_missed + s.jumps : 0
   const pct = s && attempted > 0 ? Math.round((s.words_ok / attempted) * 100) : 0
   const mins = s ? Math.floor(s.duration_sec / 60) : 0
@@ -123,6 +127,21 @@ export function Summary({
             <div className={`stat ${s.jumps ? 'bad' : ''}`}>
               <strong>{s.jumps}</strong> Mutashabeh jumps
             </div>
+            {/* Repeats and unplaced audio are NOT errors and must never be
+                styled as such: repeating an ayah is normal recitation, and
+                audio we could not place is our uncertainty, not the reciter's
+                mistake (P0-4). They are shown because hiding them makes a
+                restarted session look identical to a clean one. */}
+            {s.repeats > 0 && (
+              <div className="stat neutral">
+                <strong>{s.repeats}</strong> repeat{s.repeats === 1 ? '' : 's'}
+              </div>
+            )}
+            {s.uncertain > 0 && (
+              <div className="stat uncertain">
+                <strong>{s.uncertain}</strong> not placed
+              </div>
+            )}
             <div className="stat">
               <strong>
                 {mins}m {secs}s
