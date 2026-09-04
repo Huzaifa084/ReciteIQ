@@ -79,3 +79,66 @@ a later window, so its red would have been withdrawn.
   (1 → 5) is the clean one.
 - Ayah 7 remains unmatched in all three takes (closest CER 0.645–0.774). It is the
   longest ayah and needs its own look.
+
+---
+
+# CORRECTION after three takes per condition (2026-09-04)
+
+The conclusion above was drawn from **one take per condition** and **overstated the
+effect**. With three sessions each:
+
+| session | mode | credited | 1st chain | false reds |
+|---|---|---|---|---|
+| `9f834776` | ON | 1/7 | `[1]` | no |
+| `0c96ddfd` | ON | 5/7 | `[1,2]` | no |
+| `4f822281` | ON | **6/7** | `[1]` | no |
+| `a765b6a2` | OFF | **6/7** | `[1]` | no |
+| `d370ad27` | OFF | 5/7 | **`[3]`** | **yes — ayahs 1, 2** |
+| `95a50f49` | OFF | 5/7 | **`[3]`** | **yes — ayahs 1, 2** |
+
+| mode | credited mean | range |
+|---|---|---|
+| processing ON | 4.00 | **1 – 6** |
+| processing OFF | **5.33** | **5 – 6** |
+
+**What survives:** processing OFF is still better, and notably more *consistent* —
+5–6 ayahs on every take, versus 1–6 with processing on. The catastrophic 1/7 case
+only ever occurred with processing ON.
+
+**What does not survive:** the "1 → 5/6" framing. That compared the single worst
+ON session against the OFF sessions. Processing ON reached 6/7 in its best take,
+so the honest claim is "more consistent", not "transformative". n=3 per condition
+is still small.
+
+## The false reds are NOT the audio mode
+
+They occur **iff the first chain of the session anchored on ayah 3** — 2 of 6
+sessions, both of which happened to be processing-off takes, but the mechanism is
+the substring bug, not the audio path.
+
+Verified: in `95a50f49` the 4.42s window chaining `[3]` is the session's **first**
+window. So `_no_match_run == 0` and `c_ctc = 0.971` (high), which makes P0-4's
+`unplaced` test **False** — and the leading gap is therefore reported as
+`MISSED_AYAH` rather than `UNCERTAIN`. Ayahs 1 and 2 go red even though the
+reciter recited them; the tracker simply anchored on ayah 3, whose reference is a
+substring of ayah 1's at CER 0.125.
+
+Both red sessions then chained `[2]` on the *next* window, so ayah 2 was credited
+while its red still stood — because `phoneme_revoke_late_miss` is off.
+
+## Revised priorities
+
+1. **Session-start anchor rule (new, highest value).** At the very first chain of a
+   session there is *no prior evidence of any kind*, so a leading gap must be
+   `UNCERTAIN`, never `MISSED_AYAH`. This is P0-4's own principle — absence of
+   evidence is not evidence of a skip — applied to the one case P0-4 misses,
+   because it keys on `_no_match_run > 0` and at session start that counter is
+   necessarily 0. Fixes both red sessions completely, and is a few lines.
+2. **`phoneme_revoke_late_miss` on.** Independently withdraws ayah 2's red in both
+   sessions once the next window credits it.
+3. **Raw audio as default** — still recommended for consistency (5–6 vs 1–6), but
+   on this evidence it is a *reliability* improvement, not the headline fix.
+4. **Beam tracker (P1-5)** now has three motivating cases: Al-Kafirun 3/5,
+   Al-Fatihah 1:3 ⊂ 1:1, and the anchor ambiguity above.
+
+Ayah 7 remains unmatched in every one of the six takes (closest CER 0.583–0.774).
