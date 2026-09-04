@@ -367,7 +367,14 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                     ):
                         tr = await engine.transcribe(seg.audio, seg.duration)
                         if not tr.gated:
-                            events = live.tracker.feed_segment(tokenize(tr.text))
+                            # The final segment carries the same replayed overlap
+                            # as any other segment after a hard cut, and dropping
+                            # the flag here meant neither dedup nor the rewind
+                            # guard ran on it — which is exactly where a clean
+                            # Al-Inshiqaq produced its REPEAT.
+                            events = live.tracker.feed_segment(
+                                tokenize(tr.text), forced_cut=seg.starts_with_overlap
+                            )
                             live.record(events)
                             await asyncio.to_thread(_persist_events, live.id, events)
                             await ws.send_json(
@@ -405,17 +412,34 @@ def finalize_session(session_id: uuid.UUID) -> None:
             row = db.get(DBSessionRow, session_id)
             if row is None:
                 return
+            # A summary the live finaliser already wrote is better than anything
+            # that can be reconstructed here: it saw the provisional/confirmed/
+            # revoked lifecycle as it happened. Re-aggregating over it is how the
+            # phoneme summary got clobbered with zeros once, and how a correct
+            # distinct-word count got replaced by an event count.
+            if db.get(SessionSummary, session_id) is not None:
+                if row.status != "ended":
+                    row.status = "ended"
+                    row.ended_at = datetime.now(timezone.utc)
+                    db.commit()
+                return
             events = db.execute(
                 select(SessionEvent).where(SessionEvent.session_id == session_id)
             ).scalars().all()
             counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
                       "repeats": 0, "uncertain": 0}
+            ok_idx: set = set()
             detail = []
             for e in events:
                 if e.payload.get("state") != "confirmed":
                     continue
                 if e.type == "WORD_OK":
-                    counts["words_ok"] += 1
+                    # DISTINCT words. The stored row nests the word ref under
+                    # `payload`, so reading idx off the top level silently gave
+                    # None for every event and counted 109 words for a 107-word
+                    # surah.
+                    ok_idx.add(e.payload.get("payload", {}).get("idx"))
+                    counts["words_ok"] = len(ok_idx)
                 elif e.type == "MISSED_WORD":
                     counts["words_missed"] += 1
                     detail.append(e.payload)
