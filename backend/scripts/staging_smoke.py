@@ -6,8 +6,13 @@ right way to iterate on detector logic but proves nothing about the server: the
 engine flag, the segmentation the engine picks, the lock, the event stream, the
 finaliser and the schema are all untested by it. This drives the whole path.
 
-usage: staging_smoke.py <base_url> <wav> <surah_id> [expected_ayahs]
-       staging_smoke.py http://127.0.0.1:19844 clip.wav 84 25
+usage: staging_smoke.py <base_url> <wav> <surah_id> [expected_ayahs] [--clean]
+       staging_smoke.py http://127.0.0.1:19844 clip.wav 84 25 --clean
+
+--clean asserts the invariants a correct recitation must satisfy: no error of any
+kind, and no word credited twice. The second one matters — the first version only
+checked that SOMETHING was credited, so it printed PASS three times while the
+summary said 109 words for a 107-word surah.
 """
 import json
 import sys
@@ -18,13 +23,18 @@ import requests
 from websockets.sync.client import connect
 
 base, wav_path, surah = sys.argv[1], sys.argv[2], int(sys.argv[3])
-expect = int(sys.argv[4]) if len(sys.argv) > 4 else None
+expect = int(sys.argv[4]) if len(sys.argv) > 4 and not sys.argv[4].startswith("-") else None
+clean = "--clean" in sys.argv
 
 with wave.open(wav_path) as w:
     assert w.getframerate() == 16000 and w.getnchannels() == 1, "need 16k mono"
     pcm = w.readframes(w.getnframes())
 dur = len(pcm) / 2 / 16000
 print(f"clip {wav_path}  {dur:.1f}s  surah {surah}")
+
+ayahs = requests.get(f"{base}/api/surahs/{surah}/text", timeout=10).json()
+n_ref_words = sum(len(a["words"]) for a in ayahs)
+print(f"reference has {n_ref_words} words in {len(ayahs)} ayahs")
 
 r = requests.post(f"{base}/api/sessions", json={"surah_id": surah, "start_ayah": 1}, timeout=10)
 r.raise_for_status()
@@ -85,6 +95,14 @@ else:
     for k in ("repeats", "uncertain"):
         if k not in s:
             fail.append(f"summary missing {k}")
+    # A word cannot be recited more correctly than once. Exceeding the reference
+    # length means a rewind re-credited words that were already counted.
+    if s["words_ok"] > n_ref_words:
+        fail.append(f"words_ok {s['words_ok']} exceeds the {n_ref_words}-word reference")
+    if clean:
+        for k in ("words_missed", "ayahs_missed", "jumps", "repeats"):
+            if s[k]:
+                fail.append(f"clean recitation reported {s[k]} {k}")
 if expect and len(ok_ayahs) < expect:
     fail.append(f"only {len(ok_ayahs)}/{expect} ayahs reached")
 
