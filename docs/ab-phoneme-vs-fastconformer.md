@@ -70,23 +70,29 @@ the 0.0443 measured on whole files, because here each VAD window is transcribed
 separately and window boundaries cut mid-ayah. Window quality matters to the text
 path too.
 
-## Verdict
+## Verdict (superseded — see below)
 
 **ASR: settled.** FastConformer is decisively better and preserves errors.
 **Error fidelity: settled.** Word-level detection the phoneme path cannot do.
 **Speed: settled.** Faster.
-**Detector: NOT settled.** Al-Inshiqaq 7/25 on a good transcript is a blocking
-defect, and it is in the *existing text logic*, not the ASR.
+**Detector: was NOT settled.** Al-Inshiqaq 7/25 on a good transcript was a
+blocking defect in the *existing text logic*, not the ASR.
 
-The swap is the right direction, but "FastConformer + the existing text logic"
-is not yet better than the current phoneme implementation *as a complete Sami* —
-because the existing text logic has an unfixed failure on long surahs.
+## Resolved
 
-## Next
+The detector blocker was found and fixed, along with five more defects it was
+masking. Al-Inshiqaq is **25/25**. The full 15-case gate, its root-cause
+analysis and the segmentation decision now live in `gate-release.md`; the
+rollout and rollback procedure in `runbook-engine-rollback.md`.
 
-1. **Diagnose Al-Inshiqaq in the detector.** The per-window diagnostics ported
-   into `ws/session.py` should show where the pointer is lost. Likely candidates:
-   `align_window_fwd`/`align_window_back` (12/8 words) against ~27-word windows,
-   or `match_score_min = 78` rejecting good words.
-2. Re-run this A/B after the fix.
-3. Complete the container memory gate.
+Headline of the re-run, with both arms on identical audio and identical
+segments: across six clean recitations the text path credits 74/74 ayahs by the
+loose metric and 71/74 by the strict one, with **zero** false MISSED_WORD,
+MISSED_AYAH or jump, against 70/74 and two false MISSED_AYAHs for the phoneme
+path. On deliberate errors the gap is wider: the text path flags substituted and
+skipped words the phoneme path does not report at all.
+
+One caveat on this page's operational table: those timings were measured with
+leftover test containers competing for CPU. The clean figures — text path 0.81x
+total inference, 3.0s vs 3.7s median time-to-first-feedback — stand, and the
+correctness figures above are load-independent.
