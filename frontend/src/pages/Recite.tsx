@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { Recorder } from '../audio/recorder'
 import { JumpBanner } from '../components/JumpBanner'
-import { MushafView } from '../components/MushafView'
+import { MushafView, WORD_STATUS_LABEL } from '../components/MushafView'
+import type { WordDetail } from '../components/MushafView'
 import { applyEvents, initialState, type ReciteState } from '../state/reducer'
 import { TopBar } from '../components/TopBar'
 import type { DisplayAyah, SurahInfo } from '../types'
@@ -46,6 +47,9 @@ export function Recite({
   // 25s window this is the only sign of life for up to ~28s, and for a short
   // surah for the whole recitation — without it the app reads as broken.
   const [heard, setHeard] = useState(0)
+  // A flagged word the reciter tapped. Colour alone does not say WHAT happened,
+  // and after a long session the summary list is a poor way to find one word.
+  const [inspected, setInspected] = useState<(WordDetail & { idx: number }) | null>(null)
   const [error, setError] = useState('')
   const sockRef = useRef<SessionSocket | null>(null)
   const recRef = useRef<Recorder | null>(null)
@@ -233,7 +237,27 @@ export function Recite({
       {ayahs.length > 0 && (
         <div className="mushaf-frame">
           <div className="ornament" />
-          <MushafView ayahs={ayahs} state={state} />
+          <MushafView
+            ayahs={ayahs}
+            state={state}
+            selectedIdx={inspected?.idx ?? null}
+            onWordSelect={(d) => setInspected((cur) => (cur?.idx === d.idx ? null : d))}
+          />
+        </div>
+      )}
+
+      {inspected && (
+        <div className="word-detail" role="status">
+          <span className="ar word-detail-word">{inspected.text}</span>
+          <span className="word-detail-where">
+            Ayah {inspected.ayah} · word {inspected.position}
+          </span>
+          <span className={`word-detail-verdict verdict-${inspected.status}`}>
+            {WORD_STATUS_LABEL[inspected.status]}
+          </span>
+          <button className="word-detail-close" onClick={() => setInspected(null)} aria-label="Close">
+            ×
+          </button>
         </div>
       )}
 
@@ -242,6 +266,7 @@ export function Recite({
           <span><i className="i-ok" /> recited</span>
           <span><i className="i-heard" /> heard, not confirmed</span>
           <span><i className="i-missed" /> missed</span>
+          <span className="legend-hint">tap a flagged word to see what happened</span>
           <span><i className="i-checking" /> checking…</span>
           <span><i className="i-unplaced" /> unplaced (still listening)</span>
           <span><i className="i-current" /> current position</span>
