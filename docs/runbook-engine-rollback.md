@@ -48,7 +48,21 @@ and `docker-compose.yml` builds the backend from `Dockerfile.fastconformer`.
 The previous file is kept at `deploy/.env.bak-preflip`.
 
 Post-flip verification: `scripts/release_regression.py <base_url>` — seven cases
-end to end over the real WebSocket. **7/7 pass.**
+end to end over the real WebSocket.
+
+- Against the backend directly (staging): **7/7 pass.**
+- Against the live public URL `https://reciteiq.wiserhelpdesk.com`: 6/7 in one
+  batch, with Al-Inshiqaq re-run separately and passing (25/25 ayahs, 106 words,
+  no errors, 0.97x real time).
+
+The one failure was a **transient WebSocket drop**, not a timeout: the backend
+had already processed every window of that session, the same clip on the same
+public path succeeded on retry, and nginx allows 180s against an 82s session. The
+browser client reconnects with resume (D9, five attempts with backoff); the bare
+test script does not, which is why it saw an error the SPA would have absorbed.
+
+If it recurs often enough to matter, teach `release_regression.py` to reconnect
+the way the SPA does before treating a drop as a product failure.
 
 **Do not set `RECITEIQ_SEGMENT_MAX_SEC` or `RECITEIQ_SILENCE_CUT_SEC`.** The
 engine selects 25 s / 0.5 s, which is what the release gate measured; an

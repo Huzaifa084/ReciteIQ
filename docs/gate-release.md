@@ -128,3 +128,24 @@ not by guessing.
 Single reciter, six short surahs, one microphone. Concurrency, memory and
 latency are covered separately in `fastconformer-ops.md`. Surah 55 (the 31×
 refrain) and speaker enrollment remain untested.
+
+## Post-flip verification (production)
+
+FastConformer + the text tracker became the production default after this gate.
+`scripts/release_regression.py` re-runs the named cases end to end:
+
+| case | result |
+|---|---|
+| Al-Fatihah clean | 7/7 ayahs, no errors |
+| Al-Fatihah skipped word | flags `لله` — the word the fixture removed |
+| Al-Fatihah skipped ayah | `MISSED_AYAH 3` |
+| Al-Kafirun 3→5 | one `MISSED_AYAH 4`, no scattered word errors |
+| Al-Kafirun repeat | `REPEAT`, 26/26 words, no false error |
+| Az-Zalzalah substitution | flags the substituted word |
+| Al-Inshiqaq long clean | 25/25 ayahs, 106 words, no errors, 0.97x real time |
+
+7/7 against the backend directly. Against the live public URL the same suite
+scored 6/7 in one batch: Al-Inshiqaq hit a transient WebSocket drop, and passed
+on a separate re-run. The backend had completed every window of the dropped
+session, so this is connection flakiness rather than a processing failure — and
+the SPA reconnects with resume where the test script does not.
