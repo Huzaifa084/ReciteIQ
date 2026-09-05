@@ -98,9 +98,22 @@ class LiveSession:
         self.last_frame = time.monotonic()
         self.bytes_received = 0
         self.counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
-                       "repeats": 0, "uncertain": 0}
+                       "repeats": 0, "uncertain": 0, "words_expected": 0}
         self.no_match_run = 0        # consecutive windows we heard but could not place
-        self._ok_idx: set[int] = set()   # distinct reference words confirmed
+        self._ok_idx: set[int] = set()       # distinct reference words confirmed
+        # Reference words we returned a VERDICT on, so accuracy has an honest
+        # denominator. words_ok/(words_ok+words_missed) was wrong: the words
+        # inside a skipped ayah aggregate into MISSED_AYAH and never reach
+        # words_missed, so they vanished from the denominator entirely and a
+        # reciter who skipped three ayahs of Al-Fatihah was told 100%
+        # (docs/audit-as-built.md, B-2).
+        #
+        # UNCERTAIN words are deliberately excluded from BOTH sides: an
+        # unconfirmed word is our uncertainty, not the reciter's mistake, and
+        # counting it against them would contradict the rule the rest of the
+        # system follows. It is reported on its own instead.
+        self._missed_word_idx: set[int] = set()
+        self._missed_ayah_idx: set[int] = set()
         self.last_heard = 0.0            # throttle for the "we can hear you" frame
         self.detail: list[dict] = []
 
@@ -162,6 +175,7 @@ class LiveSession:
                 elif e.type in self._COUNT_KEY:
                     self.counts[self._COUNT_KEY[e.type]] += 1
                     self.detail.append(e.to_dict())
+                    self._track_expected(e, add=True)
                 elif e.type == EventType.REPEAT:
                     self.counts["repeats"] += 1      # benign: counted, never an error
                 elif e.type == EventType.UNCERTAIN:
@@ -172,6 +186,26 @@ class LiveSession:
                 self.detail = [d for d in self.detail if d["event_id"] != e.refers_to]
                 if len(self.detail) < before:
                     self.counts[self._COUNT_KEY[e.type]] -= 1
+                    self._track_expected(e, add=False)
+        self.counts["words_expected"] = len(
+            self._ok_idx | self._missed_word_idx | self._missed_ayah_idx
+        )
+
+    def _track_expected(self, e: Event, *, add: bool) -> None:
+        """Remember which reference words a verdict covered, so a withdrawn
+        verdict also leaves the denominator."""
+        if e.type == EventType.MISSED_WORD:
+            idx = e.payload.get("idx")
+            if idx is not None:
+                self._missed_word_idx.add(idx) if add else self._missed_word_idx.discard(idx)
+        elif e.type == EventType.MISSED_AYAH:
+            ayah_id = e.payload.get("ayah_id")
+            ref = getattr(self, "ref", None)
+            if ayah_id is None or not ref:
+                return
+            for w in ref:
+                if w.ayah_id == ayah_id:
+                    self._missed_ayah_idx.add(w.idx) if add else self._missed_ayah_idx.discard(w.idx)
 
 
 def _persist_events(session_id: uuid.UUID, events: list[Event]) -> None:
@@ -444,8 +478,10 @@ def finalize_session(session_id: uuid.UUID) -> None:
                 select(SessionEvent).where(SessionEvent.session_id == session_id)
             ).scalars().all()
             counts = {"words_ok": 0, "words_missed": 0, "ayahs_missed": 0, "jumps": 0,
-                      "repeats": 0, "uncertain": 0}
+                      "repeats": 0, "uncertain": 0, "words_expected": 0}
             ok_idx: set = set()
+            missed_idx: set = set()
+            missed_ayah_ids: set = set()
             detail = []
             for e in events:
                 if e.payload.get("state") != "confirmed":
@@ -460,9 +496,11 @@ def finalize_session(session_id: uuid.UUID) -> None:
                 elif e.type == "MISSED_WORD":
                     counts["words_missed"] += 1
                     detail.append(e.payload)
+                    missed_idx.add(e.payload.get("payload", {}).get("idx"))
                 elif e.type == "MISSED_AYAH":
                     counts["ayahs_missed"] += 1
                     detail.append(e.payload)
+                    missed_ayah_ids.add(e.payload.get("payload", {}).get("ayah_id"))
                 elif e.type == "MUTASHABEH_JUMP":
                     counts["jumps"] += 1
                     detail.append(e.payload)
@@ -470,6 +508,18 @@ def finalize_session(session_id: uuid.UUID) -> None:
                     counts["repeats"] += 1     # benign: counted, never an error
                 elif e.type == "UNCERTAIN":
                     counts["uncertain"] += 1
+            # Words inside a skipped ayah belong in the accuracy denominator,
+            # so resolve those ayah ids to their word counts here too.
+            if missed_ayah_ids:
+                from app.db.models import Word
+                n = db.execute(
+                    select(Word.id).where(Word.ayah_id.in_(
+                        {a for a in missed_ayah_ids if a is not None}))
+                ).scalars().all()
+                counts["words_expected"] = len(ok_idx | missed_idx) + len(n)
+            else:
+                counts["words_expected"] = len(ok_idx | missed_idx)
+
             row.status = "ended"
             row.ended_at = datetime.now(timezone.utc)
             # An aggregation that found nothing is not evidence the session was

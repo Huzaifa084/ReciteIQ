@@ -57,5 +57,10 @@ export interface SessionSummaryData {
   /** Benign, never counted as errors — see the note in Summary.tsx. */
   repeats: number
   uncertain: number
+  /** Accuracy comes from the server. Do NOT recompute it here: a denominator
+   *  built from words_ok + words_missed omits every word inside a skipped
+   *  ayah, which reported 100% for a recitation that skipped three. */
+  words_expected: number
+  accuracy_pct: number | null
   errors: Record<string, any>[]
 }

@@ -367,6 +367,7 @@ def _finalize(session_id: str, duration: float = 0.0, counts: dict | None = None
                 ayahs_missed=c.get("ayahs_missed", 0),
                 jumps=c.get("jumps", 0),
                 repeats=c.get("repeats", 0),
+                words_expected=c.get("words_ok", 0),   # v1 tracker has no word-level misses
                 # kept OUT of `errors`: unplaced audio is our uncertainty, not a
                 # mistake by the reciter (P0-4)
                 uncertain=c.get("uncertain", 0),

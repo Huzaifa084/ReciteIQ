@@ -1,0 +1,23 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # scan the whole history, not just the tip
+      - name: Scan working tree
+        run: ./scripts/check-secrets.sh --all
+      - name: Scan history for known credential shapes
+        run: |
+          if git rev-list --all --objects \
+             | git cat-file --batch-check='%(objecttype) %(objectname) %(rest)' \
+             | awk '$1=="blob" {print $2}' \
+             | xargs -r -n64 git cat-file --batch \
+             | grep -aEq 'gsk_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}'; then
+            echo "A credential-shaped string exists in git history."
+            exit 1
+          fi

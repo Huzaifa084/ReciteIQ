@@ -164,4 +164,8 @@ class SessionSummary(Base):
     # once, and unplaced audio looks like a clean run.
     repeats: Mapped[int] = mapped_column(Integer, default=0)
     uncertain: Mapped[int] = mapped_column(Integer, default=0)
+    # Reference words the session returned a verdict on. This is the accuracy
+    # DENOMINATOR, and it exists because deriving one in the UI from
+    # words_ok + words_missed silently omitted every word inside a skipped ayah.
+    words_expected: Mapped[int] = mapped_column(Integer, default=0)
     detail: Mapped[dict] = mapped_column(JSONB, default=dict)  # per-error positions for the summary view

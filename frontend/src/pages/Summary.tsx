@@ -58,7 +58,11 @@ export function Summary({
 
   const s = data?.summary
   const surah = surahs.find((x) => x.id === data?.surah_id)
-  const attempted = s ? s.words_ok + s.words_missed : 0
+  // words_expected is the server's denominator: correct words plus every word
+  // it returned a "missed" verdict on, INCLUDING the words inside a skipped
+  // ayah. Deriving one here from words_ok + words_missed is what reported 100%
+  // for a recitation that skipped three ayahs of Al-Fatihah.
+  const attempted = s?.words_expected ?? 0
   // No recitation captured at all → not "flawless", just empty (the screenshot bug)
   const empty = !s || attempted === 0
   // Repeats do not spoil a recitation, so they never block "flawless". Unplaced
@@ -67,7 +71,7 @@ export function Summary({
     s && !empty && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0 &&
     s.uncertain === 0
   const issues = s ? s.words_missed + s.ayahs_missed + s.jumps : 0
-  const pct = s && attempted > 0 ? Math.round((s.words_ok / attempted) * 100) : 0
+  const pct = s?.accuracy_pct ?? 0
   const mins = s ? Math.floor(s.duration_sec / 60) : 0
   const secs = s ? Math.round(s.duration_sec % 60) : 0
 

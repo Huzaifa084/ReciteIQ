@@ -40,6 +40,8 @@ services:
       # select the measured production path; rollback is documented in
       # docs/runbook-engine-rollback.md.
       RECITEIQ_ASR_ENGINE: ${RECITEIQ_ASR_ENGINE:-fastconformer}
+      # Empty unless the cloud engine is actually selected. A live credential in
+      # a public-facing container that never reads it is pure exposure (S-2).
       RECITEIQ_GROQ_API_KEY: ${RECITEIQ_GROQ_API_KEY:-}
       RECITEIQ_TRACKER_MODE: ${RECITEIQ_TRACKER_MODE:-whisper}
       HF_HOME: /hf

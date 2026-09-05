@@ -108,6 +108,14 @@ def get_summary(session_id: uuid.UUID, db: DBSession = Depends(get_db)):
             "jumps": summary.jumps,
             "repeats": summary.repeats,
             "uncertain": summary.uncertain,
+            # The accuracy denominator, computed server-side. The UI must not
+            # derive one from words_ok + words_missed: that omits every word
+            # inside a skipped ayah (docs/audit-as-built.md, B-2).
+            "words_expected": summary.words_expected,
+            "accuracy_pct": (
+                round(100.0 * summary.words_ok / summary.words_expected)
+                if summary.words_expected else None
+            ),
             "errors": summary.detail.get("errors", []),
         },
     }

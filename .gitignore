@@ -5,7 +5,13 @@ node_modules/
 dist/
 models/
 *.egg-info/
+# Environment files never enter the repo — no exceptions, and no ".env.bak"
+# style escapes: a backup of a secrets file is still a secrets file. That is
+# exactly how a real Groq key reached git history once (docs/audit-as-built.md, B-1).
 .env
+.env.*
+*.env
+!.env.example
 .pytest_cache/
 phoneme_lab/
 *.pt
