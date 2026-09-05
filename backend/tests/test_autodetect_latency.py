@@ -10,7 +10,13 @@ import uuid
 
 import pytest
 
-from app.config import settings
+from app.config import Settings, settings
+
+# The shipped configuration. These tests are about the production path, and the
+# local default engine (whisper_local) uses the SAME window for tracking as the
+# detection window, which would make the comparison vacuously false rather than
+# meaningfully true.
+PROD = Settings(asr_engine="fastconformer")
 from app.db.models import Session as SessionRow
 from app.db.session import SessionLocal
 from app.ws.session import LiveSession
@@ -40,8 +46,14 @@ def test_detecting_session_segments_short():
     assert live.tracker is None and live.detector is not None
     window = live.segmenter._max_samples / settings.sample_rate
     assert window == settings.detect_segment_max_sec
-    assert window < settings.segment_max_sec, (
-        "detection must not wait for the full tracking window"
+
+
+def test_detection_window_is_shorter_than_the_shipped_tracking_window():
+    """The property that fixes the 30-40 s wait, checked against the config that
+    actually ships rather than whatever the local default happens to be."""
+    assert PROD.detect_segment_max_sec < PROD.segment_max_sec, (
+        f"detection window {PROD.detect_segment_max_sec}s is not shorter than the "
+        f"{PROD.segment_max_sec}s tracking window — the wait comes back"
     )
 
 
