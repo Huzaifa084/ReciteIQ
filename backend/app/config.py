@@ -140,10 +140,34 @@ class Settings(BaseSettings):
     detect_vote_window: int = 6                # ...counted over the last N qualifying segments
 
     # --- WS abuse controls (D3) ---
-    max_concurrent_sessions: int = 3
-    max_sessions_per_ip: int = 2
+    # THE binding concurrency control. Per-IP cannot be it: the public edge is an
+    # SNI *stream* proxy with no PROXY protocol, so the real client address never
+    # reaches this stack at all and every visitor shares one bucket. Making
+    # per-IP the tighter cap is what silently limited the whole site to two
+    # simultaneous users (docs/audit-as-built.md, B-3).
+    #
+    # 6 is chosen against measurement, not hope: memory is ~1.78 GiB at one
+    # session and ~1.83 GiB at three in a 2.5 GiB container (~25 MiB per extra
+    # session — the model dominates), and inference is serialised at ~3 s per
+    # 25 s window, so each session needs the model about 12% of the time.
+    max_concurrent_sessions: int = 6
+    # Kept, and correct wherever the client address IS knowable — a direct
+    # connection, or an edge that speaks PROXY protocol. Deliberately looser
+    # than the global cap so it can never become the binding constraint again.
+    max_sessions_per_ip: int = 3
+    # Hosts whose X-Forwarded-For we believe. Behind the compose nginx every
+    # connection arrives as the proxy's container address, which collapsed the
+    # per-IP cap into a GLOBAL cap of 2 users for the whole site
+    # (docs/audit-as-built.md, B-3). Only a peer in this list may speak for
+    # someone else; anything else is rated on the address it actually came from,
+    # so a client cannot lift its own cap by inventing a header.
+    trusted_proxy_ips: list[str] = ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16", "127.0.0.1"]
     max_session_minutes: int = 90
     idle_timeout_sec: int = 120
+    # How long a dropped session stays resumable with its counts intact. Long
+    # enough to cover the SPA's five reconnect attempts (~1+2+4+8+8 s plus
+    # handshakes), short enough that an abandoned session frees its slot.
+    resume_grace_sec: int = 90
     ingest_rate_factor: float = 1.1            # x real-time; mic audio can't legitimately exceed this
     allowed_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 

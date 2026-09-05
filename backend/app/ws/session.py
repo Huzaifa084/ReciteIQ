@@ -55,18 +55,58 @@ class SessionRegistry:
         self.active: dict[str, "LiveSession"] = {}
         self.per_ip: dict[str, int] = defaultdict(int)
         self.lock = asyncio.Lock()
+        # Sessions whose socket dropped but which are not finished. A reconnect
+        # re-attaches to the SAME LiveSession, so its counts, matched words and
+        # tracker survive. Rebuilding from scratch made the final summary count
+        # only what came after the drop (docs/audit-as-built.md, B-4).
+        self.detached: dict[str, tuple["LiveSession", float]] = {}
 
     async def try_admit(self, session_id: str, ip: str) -> str | None:
-        """Returns a rejection reason, or None if admitted."""
+        """Returns a rejection reason, or None if admitted.
+
+        The slot is RESERVED here, inside the same lock that checks the caps.
+        Reserving afterwards left a window in which concurrent connects all
+        passed `len(self.active)` before any of them inserted, so the global cap
+        could be exceeded and a duplicate id orphaned a LiveSession
+        (docs/audit-as-built.md, B-10). `attach` swaps the placeholder for the
+        real object once it is built, which takes long enough (it loads the
+        surah reference) that the window was genuinely reachable.
+        """
         async with self.lock:
             if session_id in self.active:
                 return "session already connected"
             if len(self.active) >= settings.max_concurrent_sessions:
                 return "busy"
             if self.per_ip[ip] >= settings.max_sessions_per_ip:
-                return "too many sessions from this address"
+                return "too many sessions from this device"
             self.per_ip[ip] += 1
+            self.active[session_id] = None      # reservation: counts toward the cap
             return None
+
+    async def attach(self, session_id: str, live: "LiveSession") -> None:
+        async with self.lock:
+            self.active[session_id] = live
+
+    async def reclaim(self, session_id: str) -> "LiveSession | None":
+        """Take back a session whose socket dropped, if it is still within the
+        grace window. Anything older is discarded so a stale tracker can never
+        be resumed into."""
+        async with self.lock:
+            found = self.detached.pop(session_id, None)
+            cutoff = time.monotonic() - settings.resume_grace_sec
+            self.detached = {k: v for k, v in self.detached.items() if v[1] >= cutoff}
+        if found is None:
+            return None
+        live, when = found
+        return live if when >= cutoff else None
+
+    async def detach(self, session_id: str, live: "LiveSession | None") -> None:
+        async with self.lock:
+            if live is not None:
+                self.detached[session_id] = (live, time.monotonic())
+
+    def get(self, session_id: str) -> "LiveSession | None":
+        return self.active.get(session_id)
 
     async def release(self, session_id: str, ip: str) -> None:
         async with self.lock:
@@ -242,6 +282,46 @@ def _finalize(live: LiveSession) -> None:
         db.close()
 
 
+def client_ip(ws: WebSocket) -> str:
+    """The address the per-client cap should be counted against.
+
+    Behind the compose nginx, ws.client.host is the PROXY's container address
+    for every visitor, so `max_sessions_per_ip` stopped separating users and
+    became a global cap of 2 for the entire site — the third visitor anywhere
+    was told "too many sessions from this address" (audit B-3).
+
+    X-Forwarded-For is only believed when the immediate peer is a trusted
+    proxy; otherwise a client could lift its own cap by inventing the header.
+    The left-most entry is the original client, and it is validated as an IP so
+    a malformed header degrades to the peer address rather than creating an
+    unbounded bucket key.
+    """
+    import ipaddress
+
+    peer = ws.client.host if ws.client else "?"
+    fwd = ws.headers.get("x-forwarded-for", "")
+    if not fwd:
+        return peer
+    try:
+        peer_addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    for net in settings.trusted_proxy_ips:
+        try:
+            trusted = (peer_addr in ipaddress.ip_network(net, strict=False)
+                       if "/" in net else peer_addr == ipaddress.ip_address(net))
+        except ValueError:
+            continue
+        if trusted:
+            candidate = fwd.split(",")[0].strip()
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                return peer          # unparseable header: fall back, never trust
+            return candidate
+    return peer
+
+
 def _origin_allowed(ws: WebSocket) -> bool:
     origin = ws.headers.get("origin", "")
     return not origin or origin in settings.allowed_origins
@@ -263,7 +343,7 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
         await ws.close(code=4404)
         return
 
-    ip = ws.client.host if ws.client else "?"
+    ip = client_ip(ws)
     reason = await registry.try_admit(session_id, ip)
     if reason is not None:
         await ws.accept()
@@ -272,8 +352,23 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
         return
 
     await ws.accept()
-    live = LiveSession(row.id, row.surah_id, row.start_ayah)
-    registry.active[session_id] = live
+    # A reconnect must resume the SAME session object: its counts, its matched
+    # words and its tracker. Building a fresh one discarded everything recited
+    # before the drop, so the summary silently undercounted (B-4).
+    live = await registry.reclaim(session_id)
+    resumed = live is not None
+    if live is None:
+        live = LiveSession(row.id, row.surah_id, row.start_ayah)
+    await registry.attach(session_id, live)
+    if resumed:
+        log.info("session resumed session=%s words_ok=%s pointer=%s",
+                 session_id, live.counts["words_ok"],
+                 live.tracker.pointer if live.tracker else None)
+        await ws.send_json({
+            "type": "resumed",
+            "idx": live.tracker.pointer if live.tracker else 0,
+            "words_ok": live.counts["words_ok"],
+        })
     engine = get_engine()
 
     db = SessionLocal()
@@ -445,15 +540,30 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                     break
     except WebSocketDisconnect:
         pass  # plain disconnect: leave row 'active' so the client can reconnect+resume
+    except Exception:
+        # Anything else — an ASR failure, a DB error, a malformed control frame
+        # — used to propagate out of the handler: the session died with the row
+        # stuck 'active', no summary, and nothing said to the reciter (B-5).
+        # Their recitation is real work; finalise it and tell them.
+        log.exception("session failed session=%s", session_id)
+        try:
+            await ws.send_json({"type": "ended", "reason": "internal error"})
+        except Exception:
+            pass  # socket may already be gone; the summary still gets written
+        finalize = True
     finally:
         await registry.release(session_id, ip)
         if finalize:
             _finalize(live)
+        else:
+            # Socket dropped mid-session: hold the state so a reconnect can
+            # resume into it rather than starting over.
+            await registry.detach(session_id, live)
 
 
 def finalize_session(session_id: uuid.UUID) -> None:
     """Explicit finalize from the REST layer (POST /sessions/{id}/end)."""
-    live = registry.active.get(str(session_id))
+    live = registry.get(str(session_id))
     if live is not None:
         _finalize(live)
     else:
