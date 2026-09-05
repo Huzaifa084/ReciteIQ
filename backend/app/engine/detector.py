@@ -82,6 +82,13 @@ class RecitationTracker:
         # emits it as two tokens. Rare (3 of 665 words across the curated
         # surahs) and it lands on Al-Kafirun 1 and Al-Inshiqaq 6.
         self._multiword: list[str] = sorted({w.norm for w in ref if " " in w.norm})
+        # Words that stand on their own in this surah. A merge must never consume
+        # one of these: in Al-Hijr the correct pair الا + ابليس joins to
+        # "الا ابليس", which scores 82.4 against the unit "يا ابليس" nine words
+        # later — fusing two right words and matching them to the wrong place.
+        # The genuine case is the opposite: يا and ايها are not standalone words,
+        # which is exactly why neither half ever matches alone.
+        self._standalone: set[str] = {w.norm for w in ref if " " not in w.norm}
         # Words matched during the previous segment. A forced cut replays the end
         # of that segment, so a backward match landing in this set is overlap
         # residue rather than a restart.
@@ -108,13 +115,17 @@ class RecitationTracker:
         i = 0
         while i < len(tokens):
             if i + 1 < len(tokens):
-                joined = f"{tokens[i]} {tokens[i + 1]}"
-                # The join must RECONSTRUCT the unit, not overshoot it. Ratio
-                # alone is not enough: "قل يا ايها" scores 82 against "يا ايها"
-                # simply by containing it, which would swallow the قل before it.
-                if any(fuzz.ratio(joined, u) >= settings.match_score_min
-                       and abs(len(joined) - len(u)) <= 2
-                       for u in self._multiword):
+                a, b = tokens[i], tokens[i + 1]
+                joined = f"{a} {b}"
+                # Three conditions, each earned from a real failure. The join must
+                # match a unit; it must RECONSTRUCT that unit rather than overshoot
+                # it ("قل يا ايها" scores 82 against "يا ايها" merely by containing
+                # it, swallowing the قل); and neither half may be a word that
+                # stands on its own here, or two correct words get fused.
+                if (a not in self._standalone and b not in self._standalone
+                        and any(fuzz.ratio(joined, u) >= settings.match_score_min
+                                and abs(len(joined) - len(u)) <= 2
+                                for u in self._multiword)):
                     out.append(joined)
                     i += 2
                     continue

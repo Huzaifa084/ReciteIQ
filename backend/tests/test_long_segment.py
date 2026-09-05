@@ -153,3 +153,59 @@ def test_near_miss_word_is_uncertain_not_silent(ref_inshiqaq):
     assert unc, "a heard-but-unconfirmed word must emit UNCERTAIN"
     assert not [e for e in ev if e.type == EventType.MISSED_WORD
                 and e.state == EventState.CONFIRMED]
+
+
+@pytest.fixture(scope="module")
+def ref_hijr(db):
+    return load_reference(db, 15)
+
+
+def test_merge_never_consumes_standalone_words(ref_hijr):
+    """Al-Hijr 31 opens الا ابليس, and Al-Hijr 32 contains the unit يا ابليس.
+
+    Joining the two CORRECT words الا + ابليس gives "الا ابليس", which scores
+    82.4 against "يا ابليس" nine words later — well over the threshold and
+    within the length guard. Merging them fused two right words and matched
+    them to the wrong place, costing a false MISSED_AYAH and a false REPEAT on
+    a perfect recitation. Both halves stand on their own here, which is exactly
+    what distinguishes them from يا/ايها.
+    """
+    tr = RecitationTracker(ref_hijr, preamble=False)
+    toks = [w.norm for w in ref_hijr]
+    ev = []
+    for i in range(0, len(toks), 30):
+        ev += tr.feed_segment(toks[i:i + 30])
+
+    assert not [e for e in ev if e.type == EventType.REPEAT]
+    assert not [e for e in ev if e.type == EventType.MISSED_AYAH
+                and e.state == EventState.CONFIRMED]
+    assert len(_ok_words(ev)) == len(ref_hijr)
+
+
+def test_whole_quran_credits_every_word_on_perfect_input(db):
+    """Perfect input must credit every word of every surah and raise nothing.
+
+    This is the claim the engine swap unlocks: the phoneme path needed a
+    hand-built CTC reference per surah, so it covered a handful; the text path
+    reads the Quran tables, which hold all 114. Perfect input isolates the
+    detector — any failure here is alignment or bookkeeping, never the ASR.
+    Ar-Rahman (one ayah 31 times) is the stress case and is included.
+    """
+    total = credited = 0
+    defects = []
+    for surah in range(1, 115):
+        ref = load_reference(db, surah)
+        tr = RecitationTracker(ref, preamble=False)
+        toks = [w.norm for w in ref]
+        ev = []
+        for i in range(0, len(toks), 30):
+            ev += tr.feed_segment(toks[i:i + 30])
+        ok = _ok_words(ev)
+        total += len(ref); credited += len(ok)
+        bad = [e for e in ev if e.state == EventState.CONFIRMED and e.type in
+               (EventType.MISSED_WORD, EventType.MISSED_AYAH,
+                EventType.MUTASHABEH_JUMP, EventType.REPEAT)]
+        if len(ok) != len(ref) or bad:
+            defects.append((surah, len(ok), len(ref), [e.type.value for e in bad][:4]))
+    assert credited == total, f"{credited}/{total} words; defects: {defects[:10]}"
+    assert not defects
