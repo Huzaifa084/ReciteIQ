@@ -133,7 +133,15 @@ class LiveSession:
             self._init_tracker(surah_id, start_ayah or 1, preamble=True)
         else:
             self.detector = LocationDetector(get_relocation_index())
-        self.segmenter = StreamSegmenter()
+        # While auto-detect is still locating, segment short: it only needs a few
+        # words to place the reciter, and waiting for a full tracking window put
+        # the earliest possible lock at 25-28s of continuous recitation.
+        self.segmenter = (
+            StreamSegmenter()
+            if self.tracker is not None
+            else StreamSegmenter(max_sec=settings.detect_segment_max_sec,
+                                 silence_cut_sec=settings.detect_silence_cut_sec)
+        )
         self.started = time.monotonic()
         self.last_frame = time.monotonic()
         self.bytes_received = 0
@@ -175,6 +183,12 @@ class LiveSession:
         """Auto-detect resolved: build the tracker (preamble already consumed by
         the detector) and persist the location on the session row."""
         self._init_tracker(surah, ayah, preamble=False)
+        # Back to the tracking window now that we know where we are. Detection
+        # traded transcript quality for speed; tracking needs the opposite, and
+        # the release gate measured five false missed words at 5s where 25s
+        # produced none. Any audio still buffered was detection material and has
+        # already been replayed through the tracker by the caller.
+        self.segmenter = StreamSegmenter()
         db = SessionLocal()
         try:
             row = db.get(DBSessionRow, self.id)

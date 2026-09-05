@@ -131,6 +131,14 @@ class Settings(BaseSettings):
     relocation_score_min: float = 0.6          # n-gram containment to consider a relocation
 
     # --- Auto-detect (start session without choosing Surah/Ayah) ---
+    # Segmentation used only while auto-detect is still locating. Detection needs
+    # a rough location from a handful of words, not an accurate transcript, so it
+    # must not wait for the 25s tracking window: measured, the earliest possible
+    # lock on continuously-recited audio was 25-28s, which is exactly the
+    # "30-40 seconds to detect" reported from the browser. Short windows put the
+    # same decision at 3.5-5.6s. The tracking window is restored on lock.
+    detect_segment_max_sec: float = 5.0
+    detect_silence_cut_sec: float = 0.5
     detect_min_tokens: int = 4                 # don't even search before this many tokens
     detect_max_tokens: int = 16                # search window cap (longer dilutes diagonals)
     detect_score_min: float = 0.65             # single-window instant-lock threshold
