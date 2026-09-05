@@ -10,6 +10,9 @@ export interface ReciteState {
   missedAyahs: Map<number, 'provisional' | 'confirmed'>  // ayah number -> state
   uncertainAyahs: Set<number>             // heard but unplaceable (P0-4)
   jump: JumpAlert | null
+  /** Most recent restart. `seq` increments so two restarts at the same place
+   *  still re-announce — without it the second one would look like no change. */
+  repeat: { ayah: number; position: number; seq: number } | null
   position: { surah: number; ayah: number; idx: number } | null
   provisionalIndex: Map<number, number>   // event_id -> ref idx (for revocation)
 }
@@ -19,6 +22,7 @@ export const initialState = (): ReciteState => ({
   missedAyahs: new Map(),
   uncertainAyahs: new Set(),
   jump: null,
+  repeat: null,
   position: null,
   provisionalIndex: new Map(),
 })
@@ -29,6 +33,7 @@ export function applyEvents(prev: ReciteState, events: RIQEvent[]): ReciteState 
     missedAyahs: new Map(prev.missedAyahs),
     uncertainAyahs: new Set(prev.uncertainAyahs),
     jump: prev.jump,
+    repeat: prev.repeat,
     position: prev.position,
     provisionalIndex: new Map(prev.provisionalIndex),
   }
@@ -101,6 +106,14 @@ export function applyEvents(prev: ReciteState, events: RIQEvent[]): ReciteState 
           for (const [widx, st] of s.words) {
             if (widx > idx && st === 'missed-provisional') s.words.delete(widx)
           }
+        }
+        // Say so. Going back is normal recitation, but silence leaves the
+        // reciter unsure whether the tracker followed them — the words already
+        // green stay green, so nothing on screen changed at all.
+        s.repeat = {
+          ayah: e.payload.ayah as number,
+          position: e.payload.position as number,
+          seq: (prev.repeat?.seq ?? 0) + 1,
         }
         break
     }

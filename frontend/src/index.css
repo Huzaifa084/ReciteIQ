@@ -611,6 +611,17 @@ select:focus {
 /* Says what happened to one word, in words. Colour cannot carry "skipped"
    versus "heard but unconfirmed", and after a long session hunting for a single
    word in the summary list is worse than tapping it where it sits. */
+/* A restart is normal recitation, not a fault: calm, green-leaning, and it
+   leaves on its own. Never red, never a badge that demands dismissal. */
+.restart-note {
+  margin: 14px 0 0; padding: 10px 14px;
+  border: 1px solid var(--green-deep); border-radius: 12px;
+  background: var(--green-soft); color: var(--text); font-size: 0.94rem;
+  animation: restartIn 0.3s ease both;
+}
+@keyframes restartIn { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .restart-note { animation: none; } }
+
 .word-detail {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin: 14px 0 0; padding: 10px 14px;
@@ -702,6 +713,8 @@ select:focus {
 .legend .i-current { background: transparent; box-shadow: 0 0 0 1.5px var(--green); }
 
 /* jump banner */
+/* The explanation is context, not the headline — quieter than the verdict. */
+.jump-why { color: var(--muted); font-size: 0.9em; display: block; margin-top: 4px; }
 .jump-banner {
   display: flex;
   justify-content: space-between;

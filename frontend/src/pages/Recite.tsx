@@ -50,6 +50,9 @@ export function Recite({
   // A flagged word the reciter tapped. Colour alone does not say WHAT happened,
   // and after a long session the summary list is a poor way to find one word.
   const [inspected, setInspected] = useState<(WordDetail & { idx: number }) | null>(null)
+  // Transient acknowledgement of a restart. Held separately from state.repeat so
+  // it can fade on its own without touching tracking state.
+  const [restart, setRestart] = useState<{ ayah: number; seq: number } | null>(null)
   const [error, setError] = useState('')
   const sockRef = useRef<SessionSocket | null>(null)
   const recRef = useRef<Recorder | null>(null)
@@ -63,6 +66,15 @@ export function Recite({
     recRef.current = null
     sockRef.current = null
   }, [])
+
+  // A restart is benign, so this appears and leaves on its own rather than
+  // demanding a dismissal.
+  useEffect(() => {
+    if (!state.repeat) return
+    setRestart({ ayah: state.repeat.ayah, seq: state.repeat.seq })
+    const t = setTimeout(() => setRestart(null), 4500)
+    return () => clearTimeout(t)
+  }, [state.repeat?.seq])
 
   useEffect(() => {
     let cancelled = false
@@ -224,6 +236,7 @@ export function Recite({
       {state.jump && (
         <JumpBanner
           jump={state.jump}
+          from={state.position ? { surah: state.position.surah, ayah: state.position.ayah } : null}
           surahs={surahs}
           onContinueHere={() => {
             const j = state.jump!
@@ -243,6 +256,12 @@ export function Recite({
             selectedIdx={inspected?.idx ?? null}
             onWordSelect={(d) => setInspected((cur) => (cur?.idx === d.idx ? null : d))}
           />
+        </div>
+      )}
+
+      {restart && (
+        <div className="restart-note" role="status" key={restart.seq}>
+          Picked you up again from ayah {restart.ayah} — carry on.
         </div>
       )}
 
