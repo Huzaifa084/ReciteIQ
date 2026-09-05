@@ -16,7 +16,7 @@ and instantly flags **missed words**, **missed ayahs**, and **Mutashabeh jumps**
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
-![Whisper](https://img.shields.io/badge/ASR-faster--whisper-FF6F00)
+![FastConformer](https://img.shields.io/badge/ASR-NeMo%20FastConformer-76B900)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -47,7 +47,7 @@ and instantly flags **missed words**, **missed ayahs**, and **Mutashabeh jumps**
 ```
 Browser SPA (React + Vite + TS)            Backend (FastAPI — single service)
   mic → AudioWorklet → 16k PCM  ──ws──►  silero VAD (ONNX) → smart-cut segments
-  green/red MushafView          ◄─events─  → Whisper (local Quran-tuned, or Groq cloud)
+  green/red MushafView          ◄─events─  → NeMo FastConformer (Quran-fine-tuned)
   live voice ring · progress bar           → Arabic normalize → windowed fuzzy aligner
                                            → detector (miss / repeat / jump state machine)
                                            → 3-gram relocation index (Mutashabeh + auto-detect)
@@ -78,7 +78,7 @@ display, normalized Imlaei for matching — sourced from the quran.com word-by-w
 |---|---|
 | **Frontend** | React 19, Vite, TypeScript, AudioWorklet mic capture |
 | **Backend** | FastAPI, WebSockets, asyncio |
-| **ASR** | faster-whisper (CT2 int8, Quran-tuned) — *or* Groq `whisper-large-v3-turbo` (cloud, optional) |
+| **ASR** | NeMo FastConformer, Quran-fine-tuned (`mohammed/fastconformer-quran-ar`) — *or* faster-whisper / Groq, both retained behind a flag |
 | **VAD** | silero-vad (vendored ONNX, no torch) |
 | **Matching** | rapidfuzz (Levenshtein), custom alignment + detection engine |
 | **Database** | PostgreSQL 16, SQLAlchemy, Alembic |
@@ -124,17 +124,60 @@ cd deploy && docker compose build && docker compose up -d
 cp deploy/reciteiq.cron /etc/cron.d/reciteiq   # nightly backup + event retention
 ```
 
+The engine is chosen in `deploy/.env` (gitignored). One image carries both
+FastConformer and faster-whisper, so switching engines never needs a rebuild —
+see `docs/runbook-engine-rollback.md`. Do **not** set `RECITEIQ_SEGMENT_MAX_SEC`:
+the engine selects the window the release gate measured, and overriding it
+silently costs the result.
+
+After any deploy touching the ASR path or the tracker:
+
+```bash
+backend/.venv/bin/python backend/scripts/release_regression.py https://your-host
+```
+
 ## 📈 Measured
 
-- **ASR:** Quran-tuned Whisper-base CT2 int8 — RTF 0.45 solo, p95 ~2.7s/segment at 3 concurrent
-  sessions; 100% token accuracy on clean qari clips.
-- **Detection (live):** clean recitation → 0 false events · skipped ayah → exactly one MISSED_AYAH ·
-  drift to a twin verse → MUTASHABEH_JUMP with the correct destination.
+Every figure below is from a script in `backend/scripts/`, on this hardware, with
+real recitations by an amateur reciter — not a qari, and not a benchmark set.
+
+**ASR.** FastConformer scores WER 0.0443 over six real amateur recitations, and
+it transcribes what was *spoken* rather than what was expected: given a
+deliberately wrong `زلسالها` — a word occurring nowhere in the Qur'an — it wrote
+`زلسالها`. A recogniser that repairs mistakes is useless for a Sami.
+
+**Detection, six surahs, strict full-word metric** (`docs/gate-release.md`):
+
+| | result |
+|---|---|
+| clean recitation | 71/74 ayahs, **zero** false MISSED_WORD / MISSED_AYAH / jump |
+| skipped word | the *specific* removed word flagged, 3/3 surahs |
+| substituted word | flagged |
+| skipped ayah | correct `MISSED_AYAH`, 2/2 |
+| Al-Kafirun 3→5 | one `MISSED_AYAH`, not scattered word errors |
+| Al-Inshiqaq (25 ayahs) | 25/25, up from 7/25 before the detector fixes |
+
+**Whole Qur'an, perfect input** (`docs/scope-whole-quran.md`):
+**77,429 / 77,429 words credited across all 114 surahs**, zero false events —
+Ar-Rahman's 31× refrain included. Word-level error injection across 104 surahs
+catches 100% of skipped and substituted words.
+
+**Runtime.** ~1.8 GiB steady in a 2.5 GiB container; a 25 s window transcribes in
+~3 s warm (RTF ≈ 0.12); real-time factor ~1.0 end to end; two concurrent sessions
+served, a third shed cleanly by design.
+
+**Known limitation.** Long-distance skipped-ayah recovery is **not yet universal**.
+The aligner searches 12 words ahead, and only 42 of 114 surahs have every ayah
+inside that window (Al-Baqarah's longest is 128 words). A skip longer than the
+window is out of the aligner's reach and too local for the relocation index to
+call a jump, so ayah-level recovery on long surahs is ~85% rather than ~100%.
+Word-level detection is unaffected. All curated surahs are inside the safe 42.
 
 ## 🗺️ Roadmap
 
-Accounts &amp; progress dashboards · Tajweed feedback · richer cloud-ASR options ·
-amateur-voice evaluation corpus.
+Long-distance skipped-ayah recovery (see the known limitation above) ·
+accounts &amp; progress dashboards · Tajweed feedback · partial-window decoding to
+cut the 25 s time-to-first-feedback · amateur-voice evaluation corpus.
 
 ## 👤 Authors
 

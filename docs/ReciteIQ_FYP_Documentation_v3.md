@@ -103,7 +103,7 @@ By combining speech processing, Natural Language Processing, and web application
 The Holy Quran holds a central place in the life of every Muslim and is recited daily across the world for both worship and memorisation. Accurate recitation, in terms of both pronunciation and the correct sequence of words and verses, is regarded as an essential religious obligation. Traditionally, students learn recitation in institutions such as Madaris and mosques, where a qualified teacher, commonly known as a Qari or Hafiz, listens to the recitation and corrects the learner whenever an error occurs. This method, although effective, is limited by the availability of teachers, physical distance, restricted class time, and the inability of a single teacher to provide individual attention to every student during self-study sessions.
 In recent years, advancements in Artificial Intelligence (AI), speech processing, and Natural Language Processing (NLP) have made it possible to replicate, in part, the supervisory role of a human instructor through intelligent software systems. Automatic Speech Recognition (ASR) models have progressed significantly, and modern Arabic speech-to-text engines are now capable of transcribing recited Arabic audio with increasing accuracy. Parallel progress in text-alignment algorithms and digital Quran databases has opened new possibilities for building assistive technologies that can listen to a learner's recitation and provide meaningful feedback in real time.
 ReciteIQ (Digital Mutashabeh Monitor) builds upon these advancements to support Hifz practice by listening to a reciter through the browser microphone, converting the Arabic speech into text, and comparing it against the original Quranic text stored in a structured Uthmani-script database. By performing word-level alignment and sequence tracking, the system detects three key issues within the FYP scope: missed words within an Ayah, missed Ayahs (skipping ahead), and jumps to similar (Mutashabeh) locations. Detected issues are highlighted on the web interface so the reciter can correct mistakes immediately.
-The project is designed for the web phase in the current FYP scope, delivered through a web-based interface with a backend service implemented in Node.js and a dedicated Python-based AI engine responsible for speech transcription and alignment. A PostgreSQL database stores the structured Quran dataset, including Surahs, Ayahs, and normalised word sequences. Real-time interaction is achieved through WebSocket-based audio streaming, ensuring low latency between the reciter's input and the system's feedback. In its initial version, ReciteIQ focuses on text-level alignment and correction, which provides a strong technical foundation and a realistic scope for an undergraduate final year project, while keeping the door open for future extensions such as Tajweed analysis and phoneme-level evaluation.
+The project is designed for the web phase in the current FYP scope, delivered through a web-based interface with a single Python backend service (FastAPI) that hosts the API, the WebSocket session layer, and the speech-recognition and alignment engine in one process. (An earlier design separated a Node.js API from a Python AI service; the implemented system merges them, because every audio window must cross that boundary and the extra hop bought nothing.) A PostgreSQL database stores the structured Quran dataset, including Surahs, Ayahs, and normalised word sequences. Real-time interaction is achieved through WebSocket-based audio streaming, ensuring low latency between the reciter's input and the system's feedback. In its initial version, ReciteIQ focuses on text-level alignment and correction, which provides a strong technical foundation and a realistic scope for an undergraduate final year project, while keeping the door open for future extensions such as Tajweed analysis and phoneme-level evaluation.
 
 ### Introduction
 
@@ -531,7 +531,7 @@ The Sequence Diagram illustrates the ordered exchange of messages between the ma
 
 ##### Component Diagram of the System
 
-The Component Diagram provides an architectural view of ReciteIQ at the level of deployable units. The key components are the Web Client (browser-based interface), the Node.js Backend (responsible for API endpoints and WebSocket management), the Python AI Service (responsible for speech recognition, normalisation, matching, and Mutashabeh detection), the PostgreSQL Database (storing the Uthmani-script Quran dataset and Mutashabeh mapping), and external ASR engines (e.g., Whisper). Interfaces between components are described explicitly: HTTPS/REST and WebSocket between the Web Client and the Node.js Backend, internal HTTP calls between the Backend and the AI Service, SQL queries between the Backend and PostgreSQL, and API calls between the AI Service and the ASR engine.
+The Component Diagram provides an architectural view of ReciteIQ at the level of deployable units. The key components as built are the Web Client (browser-based React interface), the FastAPI Backend (API endpoints, WebSocket session management, speech recognition, normalisation, matching, and Mutashabeh detection in one service), the PostgreSQL Database (dual-script Quran dataset and the relocation index source), and the ASR model loaded in-process (NeMo FastConformer, Quran-fine-tuned). Interfaces: HTTPS/REST and WebSocket between the Web Client and the Backend, and SQL between the Backend and PostgreSQL. There is no internal HTTP hop: the recogniser is a library call, which is what keeps a 25-second window inside a ~3-second inference budget.
 
 *Figure ‎4-7 Component / Deployment Diagram*
 
@@ -540,3 +540,113 @@ The Component Diagram provides an architectural view of ReciteIQ at the level of
 ### Chapter Summary
 
 This chapter has presented the design of ReciteIQ in depth. It has justified the choice of an Iterative and Incremental software process model, identifying its benefits and limitations in the context of the project. It has explained the methodology of the proposed system in the form of a clear processing pipeline and a layered architecture, and it has introduced the entity relationship diagram that underpins the database. It has also described the set of UML diagrams, including Use Case, Class, Activity, Sequence, and Component diagrams, which together capture the structural and dynamic behaviour of the system. Taken together, these design artefacts translate the requirements baseline established in Chapter 3 into a concrete blueprint that can guide the implementation, database construction, and testing work to be presented in the later chapters of this report.
+
+---
+
+## APPENDIX — AS-BUILT ARCHITECTURE AND EVALUATION
+
+This appendix records the system as actually delivered, with measurements from
+the repository's own scripts. Where it differs from the design chapters, this
+appendix is authoritative.
+
+### Final architecture
+
+```
+Browser SPA (React 19 + Vite + TypeScript)      Backend (FastAPI, one service)
+  mic → AudioWorklet → 16 kHz PCM ──ws──►  silero VAD (ONNX) → smart-cut segments
+  Mushaf word colouring          ◄─events─  → NeMo FastConformer (Quran-fine-tuned)
+  summary: correct / missed /                → Arabic normalisation (Imlaei)
+  repeated / jumped / unplaced               → windowed fuzzy aligner (rapidfuzz)
+                                             → detector state machine
+                                             → 3-gram relocation index
+                                          PostgreSQL 16: dual-script words,
+                                          sessions, events, summaries
+```
+
+**Recognition.** `mohammed/fastconformer-quran-ar`, an RNN-T/CTC hybrid
+fine-tuned on Qur'anic Arabic, loaded in-process on CPU with a pinned thread
+budget and serialised behind an `asyncio.Lock` (NeMo's `transcribe()` is not
+re-entrant on a shared model). Audio segments are written to a temporary file
+that is deleted within the same call; recitation audio is never persisted.
+
+**Why this engine.** It was chosen on a property more important than accuracy:
+it transcribes what was *spoken*, not what was expected. Given a deliberately
+mis-recited `زلسالها` — a word that occurs nowhere in the Qur'an — it wrote
+`زلسالها`. A recogniser that silently repairs the reciter's mistakes cannot
+support a Sami, however low its word error rate.
+
+**Segmentation follows the engine.** FastConformer runs on 25-second windows;
+the previous Whisper path used 5 seconds. This is enforced in configuration
+rather than left to the operator, because on the same six recordings 5-second
+windows slice words at segment boundaries and produced five false "missed word"
+reports where 25-second windows produced none.
+
+### Measured performance
+
+Single amateur reciter, one microphone, six surahs. Not a qari and not a
+public benchmark — the numbers describe this system on realistic input.
+
+| measure | result |
+|---|---|
+| ASR word error rate | 0.0443 |
+| clean recitation, six surahs | 71/74 ayahs credited, **zero** false errors |
+| skipped word | correct word identified, 3/3 |
+| substituted word | identified |
+| skipped ayah | correct `MISSED_AYAH`, 2/2 |
+| Al-Kafirun 3→5 (mutashabeh) | one `MISSED_AYAH`, not scattered word errors |
+| Al-Inshiqaq, 25 ayahs | 25/25 (was 7/25 before the detector work) |
+| whole Qur'an, perfect input | **77,429 / 77,429 words, all 114 surahs, zero false events** |
+| post-deployment regression | 7/7 |
+| memory | ~1.8 GiB steady, 2.5 GiB limit |
+| inference | ~3 s per 25 s window warm (RTF ≈ 0.12) |
+| concurrency | 2 sessions served; a third shed cleanly with a reason |
+
+### Supported scope
+
+Recognition and word-level detection work across **all 114 surahs** — the
+detector reads the Qur'an tables directly, and the relocation index is built over
+the entire text. This is a change from the earlier phoneme-based prototype, which
+required a hand-built acoustic reference per surah and was therefore limited to a
+curated handful.
+
+Detection categories delivered: missed word, missed ayah, mutashabeh jump,
+repetition, and a fifth the design did not anticipate — *unplaced audio*, where
+the system heard something it could not confidently match. That case is reported
+in amber and explicitly not as a mistake by the reciter, because the uncertainty
+belongs to the system.
+
+### Known limitation
+
+**Long-distance skipped-ayah recovery is not yet universal across all 114
+surahs.** The aligner searches twelve words ahead of the current position, and
+only 42 of the 114 surahs have every ayah inside that window; Al-Baqarah's
+longest ayah is 128 words. When a reciter skips an ayah longer than the window,
+the word they resume on is beyond the aligner's reach, while the relocation index
+declines to intervene because the destination is only one ayah away and is
+therefore not a mutashabeh jump. The skip falls between the two mechanisms.
+
+Measured consequence: across 104 surahs with an injected skipped ayah, 84.6% are
+reported; the failures are concentrated in the long surahs. Word-level detection
+is unaffected (100% for both skipped and substituted words), and every surah in
+the curated set is inside the safe 42.
+
+Two remedies were implemented and both withdrawn after measurement — a
+far-forward search made detection worse (84.6% → 82.7%), and a local
+repositioning rule traded total detection for better event naming without a clear
+net gain. They are documented in `docs/scope-whole-quran.md` so the next attempt
+starts from evidence rather than repeating them.
+
+A second, smaller limitation: an ayah repeated *within a single 25-second window*
+is collapsed by the recogniser's RNN-T decoder and never reaches the detector, so
+that repetition is not reported. It raises no false error, and a repetition
+spanning a window boundary is still caught.
+
+### Reproducing these results
+
+| script | what it measures |
+|---|---|
+| `backend/scripts/sweep_all_surahs.py` | every word of all 114 surahs, perfect input |
+| `backend/scripts/sweep_errors.py` | injected errors across 104 surahs |
+| `backend/scripts/release_regression.py` | seven end-to-end cases against a live server |
+| `backend/scripts/staging_smoke.py` | one clip end to end, with clean-run assertions |
+| `backend/scripts/staging_concurrency.py` | concurrent sessions, memory, admission control |
