@@ -170,8 +170,11 @@ served, a third shed cleanly by design.
 The aligner searches 12 words ahead, and only 42 of 114 surahs have every ayah
 inside that window (Al-Baqarah's longest is 128 words). A skip longer than the
 window is out of the aligner's reach and too local for the relocation index to
-call a jump, so ayah-level recovery on long surahs is ~85% rather than ~100%.
-Word-level detection is unaffected. All curated surahs are inside the safe 42.
+call a jump, so ayah-level recovery across all surahs is **58.7%**, concentrated
+in the long ones. (An earlier 84.6% came from a metric that counted *any*
+mutashabeh jump as a catch; requiring the event to name the right ayah removes
+the difference entirely.) Word-level detection is unaffected at 100% for both
+skipped and substituted words, and all curated surahs are inside the safe 42.
 
 ## 🗺️ Roadmap
 

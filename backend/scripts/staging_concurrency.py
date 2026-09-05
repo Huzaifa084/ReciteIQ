@@ -6,6 +6,7 @@ inside the container's memory limit, and what happens at the admission cap.
 usage: staging_concurrency.py <base_url> <wav> <surah_id> <n_sessions>
 """
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -31,7 +32,8 @@ def run_one(tag: str):
         sid = requests.post(f"{base}/api/sessions",
                             json={"surah_id": surah, "start_ayah": 1},
                             timeout=15).json()["session_id"]
-        ws_url = base.replace("http://", "ws://") + f"/ws/session/{sid}"
+        ws_url = (base.replace("https://", "wss://").replace("http://", "ws://")
+                  + f"/ws/session/{sid}")
         t0 = time.perf_counter()
         with connect(ws_url, open_timeout=30, max_size=None) as ws:
             # Admission control answers immediately; read it before streaming or
@@ -89,7 +91,7 @@ def run_one(tag: str):
 
 def mem():
     o = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}",
-                        "reciteiq-staging-backend-staging-1"],
+                        os.environ.get("RECITEIQ_CONTAINER", "reciteiq-backend-1")],
                        capture_output=True, text=True).stdout.strip()
     return o or "?"
 

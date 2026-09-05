@@ -41,28 +41,46 @@ def run(wav: Path, surah: int):
                         timeout=15).json()["session_id"]
     ws_url = BASE.replace("https://", "wss://").replace("http://", "ws://")
     events, t0 = [], time.perf_counter()
-    with connect(f"{ws_url}/ws/session/{sid}", open_timeout=30, max_size=None) as ws:
-        for i in range(0, len(pcm), 3200):
-            ws.send(pcm[i:i + 3200])
-            target = t0 + (i + 3200) / 2 / 16000 / 1.05
-            while (slack := target - time.perf_counter()) > 0:
-                try:
-                    m = json.loads(ws.recv(timeout=slack))
-                except TimeoutError:
-                    break
-                if m.get("type") == "events":
-                    events += m["events"]
-        ws.send(json.dumps({"type": "end"}))
-        deadline = time.perf_counter() + 90
-        while time.perf_counter() < deadline:
-            try:
-                m = json.loads(ws.recv(timeout=deadline - time.perf_counter()))
-            except Exception:
-                break
-            if m.get("type") == "events":
-                events += m["events"]
-            elif m.get("type") == "ended":
-                break
+    # Reconnect the way the SPA does. A dropped socket over the public URL is a
+    # transport hiccup, not a product failure — the browser client retries with
+    # backoff and resumes, and since the session state now survives a drop
+    # (audit B-4) the run continues where it left off. A bare script that gave
+    # up on the first close was reporting connection flakiness as a gate failure.
+    i, attempts, sent_end = 0, 0, False
+    while i < len(pcm) or not sent_end:
+        try:
+            with connect(f"{ws_url}/ws/session/{sid}", open_timeout=30, max_size=None) as ws:
+                attempts = 0
+                while i < len(pcm):
+                    ws.send(pcm[i:i + 3200])
+                    i += 3200
+                    target = t0 + i / 2 / 16000 / 1.05
+                    while (slack := target - time.perf_counter()) > 0:
+                        try:
+                            m = json.loads(ws.recv(timeout=slack))
+                        except TimeoutError:
+                            break
+                        if m.get("type") == "events":
+                            events += m["events"]
+                ws.send(json.dumps({"type": "end"}))
+                sent_end = True
+                deadline = time.perf_counter() + 90
+                while time.perf_counter() < deadline:
+                    try:
+                        m = json.loads(ws.recv(timeout=deadline - time.perf_counter()))
+                    except Exception:
+                        break
+                    if m.get("type") == "events":
+                        events += m["events"]
+                    elif m.get("type") == "ended":
+                        break
+        except Exception as exc:
+            attempts += 1
+            if attempts > 5:
+                raise
+            print(f"       (reconnecting after {type(exc).__name__}; "
+                  f"{i / 2 / 16000:.0f}s of audio sent)")
+            time.sleep(min(2 ** attempts, 8))
     requests.post(f"{BASE}/api/sessions/{sid}/end", timeout=60)
     s = requests.get(f"{BASE}/api/sessions/{sid}/summary", timeout=15).json()["summary"]
     return s, events, n_words, len(ayahs), round(time.perf_counter() - t0, 1)

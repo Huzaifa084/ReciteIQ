@@ -625,8 +625,10 @@ the word they resume on is beyond the aligner's reach, while the relocation inde
 declines to intervene because the destination is only one ayah away and is
 therefore not a mutashabeh jump. The skip falls between the two mechanisms.
 
-Measured consequence: across 104 surahs with an injected skipped ayah, 84.6% are
-reported; the failures are concentrated in the long surahs. Word-level detection
+Measured consequence: across 104 surahs with an injected skipped ayah, 58.7% are
+reported, concentrated in the long surahs. An earlier figure of 84.6% was an
+artefact of a metric that counted any mutashabeh jump as a catch; requiring the
+event to name the right ayah accounts for the entire difference. Word-level detection
 is unaffected (100% for both skipped and substituted words), and every surah in
 the curated set is inside the safe 42.
 

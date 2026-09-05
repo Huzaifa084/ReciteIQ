@@ -75,7 +75,7 @@ Alembic head `c3f9a2e64d17` matches the live database. No pending migrations.
 | Live word tracking | yes | `detector.py`, `MushafView.tsx` | 19 + 9 | yes |
 | Correct-word detection | yes | `_advance` → WORD_OK | sweep: 77,429/77,429 | yes |
 | Missed-word detection | yes | `_emit_gap`, `_unattributed` | sweep: 104/104 surahs | yes |
-| Missed-ayah detection | partial | `_emit_gap` whole-ayah branch | sweep: 88/104 (84.6%) | yes |
+| Missed-ayah detection | partial | `_emit_gap` whole-ayah branch | sweep: **61/104 (58.7%)** | yes |
 | Repeat / restart | partial | `_rewind` + overlap guard | sweep: 90/104 (86.5%) | yes |
 | Mutashabeh jump | partial | `_check_relocation` + ngram index | fires, but noisy (B-9) | **not verified** |
 | Uncertain / no-match | yes | UNCERTAIN event, `no_match` frame | 1 test | yes |
@@ -347,7 +347,7 @@ Anyone can `POST /api/sessions` and open a WebSocket. `_origin_allowed` returns 
 | ASR (FastConformer) | **production-ready** | WER 0.0443; preserves spoken errors; stable memory and latency in the live container. |
 | VAD / segmentation | **production-ready** | Smart-cut and overlap behaviour measured; instrumented per window. |
 | Aligner + word detection | **production-ready** | 77,429/77,429 words on perfect input; 100% of injected word errors across 104 surahs. |
-| Ayah-level detection | needs hardening | 84.6% across surahs; structurally bounded by the 12-word window. |
+| Ayah-level detection | needs hardening | **58.7%** across surahs; structurally bounded by the 12-word window. |
 | Mutashabeh detection | prototype | Fires, but 58 events for one skip. Never verified end-to-end in the UI. |
 | Session lifecycle / WS | needs hardening | No error recovery, lossy reconnect, admission race, zero tests. |
 | Summary & statistics | **broken** | Reports 100% accuracy for a recitation that skipped three ayahs. |
@@ -413,3 +413,54 @@ Anyone can `POST /api/sessions` and open a WebSocket. `_origin_allowed` returns 
 **What is missing.** Quran search, accounts and progress statistics. And the summary, which is the screen a learner actually judges themselves by, currently computes accuracy in a way that reports 100% for a recitation that skipped three ayahs.
 
 **What I recommend next.** Do not start a new feature phase. Spend roughly one focused week on section A: rotate and purge the key, fix the accuracy math, fix the per-IP cap so more than two people can use the site, make reconnect non-lossy, and add error recovery. Those five changes are what separate "an impressive demo that works when one person uses it carefully" from something you can put in front of a panel or a class. Then add the WebSocket integration tests, because three of the five criticals live in the one file nothing tests — and only then return to features.
+
+---
+
+## Addendum — post-remediation (same day)
+
+Every P0 finding above has been fixed and verified; see the commits from `0567d76`
+onward. Two figures in the audit itself needed correcting, both because a metric
+was too generous:
+
+**Skipped-ayah detection is 58.7%, not 84.6%.** `sweep_errors.py` counted *any*
+MUTASHABEH_JUMP as a successful catch. Requiring the event to name the right
+ayah removes the difference entirely — of 380 jump events across 104
+single-skip clips, **not one** pointed at the correct place. All 61 genuine
+catches come from `MISSED_AYAH`; the jump mechanism contributed nothing to local
+skips but noise.
+
+**The jump flood is fixed, and it was worse than a duplicate problem.** Deduping
+by destination left 380 events because the index proposes a new destination as
+the pointer wanders. Allowing only one outstanding jump at a time — matching the
+single banner the UI shows — takes it to **34**, with detection rates unchanged.
+
+**B-3 could not be fixed the way the audit proposed.** The public edge is an SNI
+*stream* proxy with no PROXY protocol, so the real client address never reaches
+this stack; setting `X-Forwarded-For` from `$remote_addr` would only have
+collapsed the bucket to a different constant. The global cap is now the binding
+control (6, from the measured memory and duty-cycle figures) and per-IP is
+looser at 3 so it cannot silently become a global cap again. Restoring true
+per-user limiting requires PROXY protocol on the shared edge — outside this
+app's blast radius, and left as a documented follow-up.
+
+**S-3 was worse than "not enforced".** The first run of the in-app retention
+sweep deleted **1,108** event rows, which is the measure of how long the
+uninstalled cron had not been running.
+
+### Post-remediation verification (production, live)
+
+| check | result |
+|---|---|
+| `pytest tests` | **144 passed** (was 115) |
+| `release_regression.py` against the public URL | **7/7 pass** |
+| concurrency, 1 / 2 / 3 sessions from one client | **3/3 admitted**, 0 rejected — was 2 then rejected |
+| memory, 1 / 2 / 3 sessions | 1.677 / 1.678 / 1.679 GiB of 2.5 GiB |
+| accuracy on a skipped-ayah session | **93%** — the same case previously displayed 100% |
+| retention sweep, first run | 1,108 rows deleted |
+| jump events, 104 single-skip clips | 380 → **34** |
+| Groq key in the production container | `''` |
+| key in git history | purged; scanner refuses a re-entry |
+
+Still open, and deliberately so: **rotating the Groq key** needs the account
+owner, and **true per-user rate limiting** needs PROXY protocol on the shared
+edge, which is outside this application's blast radius.
