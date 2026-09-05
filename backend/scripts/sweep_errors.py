@@ -63,8 +63,13 @@ for surah in range(1, 115):
 
     # 2. skipped ayah — drop a whole mid ayah
     ev = run(ref, [t for i, t in enumerate(base) if i not in set(idxs)])
+    # A catch must NAME the right place. Counting "any jump fired" as success
+    # is what let 381 spurious jumps score as 91% detection and hid B-9 entirely
+    # (docs/audit-as-built.md, test audit). A jump pointing somewhere else is
+    # not a catch — it is a second error.
     named = any(e.payload.get("ayah") == mid for e in confirmed(ev, EventType.MISSED_AYAH))
-    jumped = bool(confirmed(ev, EventType.MUTASHABEH_JUMP))
+    jumped = any(e.payload.get("dest_ayah") in (mid, mid + 1)
+                 for e in confirmed(ev, EventType.MUTASHABEH_JUMP))
     res["skip_ayah_ok" if (named or jumped) else "skip_ayah_miss"] += 1
     res["skip_ayah_named"] += 1 if named else 0
     res["skip_ayah_only_jump"] += 1 if (jumped and not named) else 0

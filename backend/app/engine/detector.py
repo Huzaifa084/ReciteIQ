@@ -67,6 +67,9 @@ class RecitationTracker:
         self._jump_candidate: tuple[int, dict] | None = None  # (ayah_id, payload)
         # Destinations already reported this session — a jump is news once (B-9).
         self._jumps_reported: set[int] = set()
+        # A confirmed jump nobody has resolved yet. Cleared by repositioning, or
+        # by the tracker recovering the thread on its own.
+        self._jump_outstanding = False
         self._jump_segments = 0
         self._jump_provisional: Event | None = None
         # Preamble (D7): isti'adha then basmalah. Surah 1 ayah 1 IS the basmalah —
@@ -242,6 +245,7 @@ class RecitationTracker:
             self._check_relocation(events)
         elif segment_matched_any:
             self._clear_jump_candidate(events)
+            self._jump_outstanding = False   # back on the reference: not lost any more
 
         if self.ref:
             cur = self.ref[min(self.pointer, len(self.ref) - 1)]
@@ -257,6 +261,7 @@ class RecitationTracker:
         self._jump_segments = 0
         self._jump_provisional = None
         self._jumps_reported.clear()   # a new position makes old destinations news again
+        self._jump_outstanding = False
 
     # ------------------------------------------------------------- internals
 
@@ -538,8 +543,16 @@ class RecitationTracker:
                 # the banner would flap and the summary would fill with jumps
                 # the reciter never made (B-9). A destination already reported
                 # is not news; only moving somewhere new is.
-                if ayah_id not in self._jumps_reported:
+                # Dedup by destination is not enough on its own: as the pointer
+                # wanders the index proposes a NEW destination each time, which
+                # still produced 380 events across 104 single-skip clips — and
+                # measurement showed not one of them named the right ayah. Only
+                # one jump can be outstanding at a time, matching the UI, which
+                # shows one banner: until the reciter acts on it or the tracker
+                # re-syncs, further proposals are the same lost-ness restated.
+                if ayah_id not in self._jumps_reported and not self._jump_outstanding:
                     self._jumps_reported.add(ayah_id)
+                    self._jump_outstanding = True
                     events.append(
                         Event(
                             EventType.MUTASHABEH_JUMP,
