@@ -5,7 +5,7 @@
 | | engine | tracker | segmentation | where |
 |---|---|---|---|---|
 | **production** | `fastconformer` | `whisper` (text) | 25 s / 0.5 s | `reciteiq.wiserhelpdesk.com` → `reciteiq-web-1` → `reciteiq-backend-1` |
-| **staging** | `fastconformer` | `whisper` (text) | 25 s / 0.5 s | `127.0.0.1:19844`, loopback only |
+| **staging** | `fastconformer` | `whisper` (text) | 25 s / 0.5 s | `127.0.0.1:19844`, loopback only — **stopped** |
 | **rollback** | `whisper_local` | `phoneme` | 5 s / 0.7 s | two lines in `deploy/.env`, no rebuild |
 
 FastConformer + the text tracker is the production default as of the flip. The
@@ -21,10 +21,16 @@ change and never a rebuild. Verified in the running container:
 
 ```
 cd /opt/apps/ReciteIQ/deploy
-docker compose -f docker-compose.staging.yml up -d
+docker compose -f docker-compose.staging.yml up -d      # start / restart
 docker compose -f docker-compose.staging.yml logs -f backend-staging
-docker compose -f docker-compose.staging.yml down
+docker compose -f docker-compose.staging.yml stop       # free its ~1.8 GiB
+docker compose -f docker-compose.staging.yml down       # remove entirely
 ```
+
+It is **stopped** now that production runs the same configuration: two backends
+held ~3.6 GiB on an 11 GiB host shared with other applications, and staging was
+no longer testing anything production wasn't. Start it before the next change
+that needs proving off the live path.
 
 The 1.2 GB checkpoint lives in the `reciteiq_hf` volume, so only the first start
 downloads it. Cold start is ~60 s after that; the healthcheck allows 240 s.
