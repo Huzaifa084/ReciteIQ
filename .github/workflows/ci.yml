@@ -13,11 +13,25 @@ jobs:
         run: ./scripts/check-secrets.sh --all
       - name: Scan history for known credential shapes
         run: |
-          if git rev-list --all --objects \
-             | git cat-file --batch-check='%(objecttype) %(objectname) %(rest)' \
-             | awk '$1=="blob" {print $2}' \
-             | xargs -r -n64 git cat-file --batch \
-             | grep -aEq 'gsk_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}'; then
+          # --batch-all-objects reads every object directly. The earlier form
+          # piped rev-list output into `git cat-file --batch`, which rejects
+          # arguments on stdin — it errored on every line and then reported a
+          # pass, which is the worst possible behaviour for a guard.
+          if git cat-file --batch-all-objects --batch --buffer \
+             | grep -aEq 'gsk_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}'; then
             echo "A credential-shaped string exists in git history."
             exit 1
           fi
+          echo "History clean."
+
+      - name: Prove the scanner actually fails on a leak
+        run: |
+          # A guard nobody has watched fail is not a guard.
+          printf 'gsk_%s\n' 'AbCdEfGhIjKlMnOpQrStUvWxYz012345' > /tmp/leak.md
+          cp /tmp/leak.md leaktest.md && git add -f leaktest.md
+          if ./scripts/check-secrets.sh; then
+            echo "Scanner did NOT catch a planted key."
+            exit 1
+          fi
+          git rm -f --cached leaktest.md >/dev/null && rm -f leaktest.md
+          echo "Scanner refuses a planted key, as it should." 
