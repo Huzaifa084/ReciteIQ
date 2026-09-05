@@ -26,18 +26,26 @@ services:
       retries: 5
 
   backend:
-    build: ../backend
+    build:
+      context: ../backend
+      # NeMo image. It also carries faster-whisper (same `asr` extras), so the
+      # phoneme rollback is a pure env-var change and needs no rebuild — which
+      # is the whole point of keeping one image for both engines.
+      dockerfile: ${RECITEIQ_BACKEND_DOCKERFILE:-Dockerfile.fastconformer}
     restart: unless-stopped
     environment:
       RECITEIQ_DATABASE_URL: postgresql+psycopg://reciteiq:reciteiq@db:5432/reciteiq
       RECITEIQ_ALLOWED_ORIGINS: '["https://reciteiq.wiserhelpdesk.com"]'
-      # ASR engine + secret come from deploy/.env (gitignored). Defaults keep
-      # the local engine if .env is absent, so the public compose has no key.
-      RECITEIQ_ASR_ENGINE: ${RECITEIQ_ASR_ENGINE:-whisper_local}
+      # ASR engine + secret come from deploy/.env (gitignored). Defaults now
+      # select the measured production path; rollback is documented in
+      # docs/runbook-engine-rollback.md.
+      RECITEIQ_ASR_ENGINE: ${RECITEIQ_ASR_ENGINE:-fastconformer}
       RECITEIQ_GROQ_API_KEY: ${RECITEIQ_GROQ_API_KEY:-}
       RECITEIQ_TRACKER_MODE: ${RECITEIQ_TRACKER_MODE:-whisper}
+      HF_HOME: /hf
     volumes:
       - ../backend/models:/app/models:ro
+      - reciteiq_hf:/hf          # 1.2GB checkpoint survives restarts
     depends_on:
       db:
         condition: service_healthy
@@ -68,4 +76,5 @@ services:
       options: { max-size: "10m", max-file: "3" }
 
 volumes:
+  reciteiq_hf:
   reciteiq_pgdata:

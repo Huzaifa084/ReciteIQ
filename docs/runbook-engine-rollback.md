@@ -4,11 +4,18 @@
 
 | | engine | tracker | segmentation | where |
 |---|---|---|---|---|
-| **production** | `whisper_local` | `phoneme` | 5 s / 0.7 s | `reciteiq.wiserhelpdesk.com` → `reciteiq-web-1` → `reciteiq-backend-1` |
-| **staging candidate** | `fastconformer` | `whisper` (text) | 25 s / 0.5 s | `127.0.0.1:19844`, loopback only |
+| **production** | `fastconformer` | `whisper` (text) | 25 s / 0.5 s | `reciteiq.wiserhelpdesk.com` → `reciteiq-web-1` → `reciteiq-backend-1` |
+| **staging** | `fastconformer` | `whisper` (text) | 25 s / 0.5 s | `127.0.0.1:19844`, loopback only |
+| **rollback** | `whisper_local` | `phoneme` | 5 s / 0.7 s | two lines in `deploy/.env`, no rebuild |
 
-Production is unchanged and is not routed through the staging container. The
-phoneme implementation is fully intact and is the rollback target.
+FastConformer + the text tracker is the production default as of the flip. The
+phoneme implementation is kept working as the rollback target but is **frozen** —
+no further development.
+
+One image serves both engines: `Dockerfile.fastconformer` installs the same
+`asr` extras that carry `faster-whisper`, so rolling back is a pure environment
+change and never a rebuild. Verified in the running container:
+`python -c "import faster_whisper, nemo"`.
 
 ## Start / stop staging
 
@@ -22,17 +29,20 @@ docker compose -f docker-compose.staging.yml down
 The 1.2 GB checkpoint lives in the `reciteiq_hf` volume, so only the first start
 downloads it. Cold start is ~60 s after that; the healthcheck allows 240 s.
 
-## Promoting the candidate to production
+## The flip (done)
 
-One file, two lines — `deploy/.env` (gitignored):
+`deploy/.env` (gitignored) now sets:
 
 ```
 RECITEIQ_ASR_ENGINE=fastconformer
 RECITEIQ_TRACKER_MODE=whisper
 ```
 
-then rebuild the production backend against `Dockerfile.fastconformer` (the
-default `Dockerfile` has no NeMo) and `docker compose up -d backend`.
+and `docker-compose.yml` builds the backend from `Dockerfile.fastconformer`.
+The previous file is kept at `deploy/.env.bak-preflip`.
+
+Post-flip verification: `scripts/release_regression.py <base_url>` — seven cases
+end to end over the real WebSocket. **7/7 pass.**
 
 **Do not set `RECITEIQ_SEGMENT_MAX_SEC` or `RECITEIQ_SILENCE_CUT_SEC`.** The
 engine selects 25 s / 0.5 s, which is what the release gate measured; an
