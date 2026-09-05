@@ -36,6 +36,10 @@ export function Recite({
   const [status, setStatus] = useState<'starting' | 'detecting' | 'live' | 'muted' | 'error'>(
     'starting',
   )
+  // Connection health, tracked separately from tracking state: the socket can
+  // be down while the tracker is mid-surah. Leaving this unwired meant the app
+  // kept saying "listening" through five failed reconnects (B-7).
+  const [link, setLink] = useState<'ok' | 'reconnecting' | 'lost'>('ok')
   const [detectedSurah, setDetectedSurah] = useState<number | null>(auto ? null : surahId)
   const [noMatchRun, setNoMatchRun] = useState(0)   // P0-4: consecutive unplaced windows
   // Seconds of speech held in the window the server has not closed yet. With a
@@ -92,7 +96,17 @@ export function Recite({
             setStatus('error')
             teardown()
           },
-          onStatusChange: () => {},
+          onStatusChange: (st) => {
+            if (st === 'open') setLink('ok')
+            else if (st === 'reconnecting') setLink('reconnecting')
+            else if (st === 'lost') {
+              setLink('lost')
+              // Stop the microphone: nothing is reaching the server, and
+              // letting them recite into it wastes their time.
+              recRef.current?.stop()
+              setError('Connection lost. Your progress so far is saved — finish to see it.')
+            }
+          },
         })
         sockRef.current = sock
         sock.connect()
@@ -137,9 +151,14 @@ export function Recite({
 
   const surah = surahs.find((s) => s.id === detectedSurah)
   const pillClass =
-    status === 'live' ? 'live' : status === 'muted' ? 'muted' : status === 'detecting' ? 'detecting' : ''
+    link !== 'ok' ? 'muted'
+    : status === 'live' ? 'live' : status === 'muted' ? 'muted' : status === 'detecting' ? 'detecting' : ''
   const pillText =
-    status === 'live' && noMatchRun >= 2
+    link === 'lost'
+      ? 'connection lost'
+      : link === 'reconnecting'
+      ? 'reconnecting…'
+      : status === 'live' && noMatchRun >= 2
       ? "can't place you"
       : status === 'live' && heard >= 3
       ? `hearing you · ${Math.round(heard)}s`

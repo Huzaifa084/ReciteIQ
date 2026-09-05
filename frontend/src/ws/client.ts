@@ -9,7 +9,7 @@ export interface WSCallbacks {
   onEvents: (events: RIQEvent[]) => void
   onEnded: (reason: string) => void
   onRejected: (reason: string) => void
-  onStatusChange: (s: 'connecting' | 'open' | 'closed') => void
+  onStatusChange: (s: 'connecting' | 'open' | 'closed' | 'reconnecting' | 'lost') => void
   /** Auto-detect resolved: the backend locked onto this location. */
   onDetected?: (surah: number, ayah: number) => void
   /** Backend heard audio but could not place it (P0-4). */
@@ -17,6 +17,8 @@ export interface WSCallbacks {
   /** Audio is being heard but the window has not closed yet — no verdict implied. */
   onBuffering?: (info: { bufferedSec: number; inSilence: boolean }) => void
 }
+
+const MAX_RECONNECTS = 5
 
 export class SessionSocket {
   private ws: WebSocket | null = null
@@ -77,11 +79,19 @@ export class SessionSocket {
     }
 
     this.ws.onclose = () => {
-      this.cb.onStatusChange('closed')
-      if (!this.closedByUs && this.reconnectAttempts < 5) {
+      if (this.closedByUs) {
+        this.cb.onStatusChange('closed')
+        return
+      }
+      if (this.reconnectAttempts < MAX_RECONNECTS) {
         const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 8000)
         this.reconnectAttempts++
+        // Say so. Silence here meant the reciter carried on into a dead socket
+        // and only found out at the summary.
+        this.cb.onStatusChange('reconnecting')
         setTimeout(() => this.connect(), delay)
+      } else {
+        this.cb.onStatusChange('lost')
       }
     }
   }
