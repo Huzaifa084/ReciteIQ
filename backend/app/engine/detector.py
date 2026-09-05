@@ -65,6 +65,8 @@ class RecitationTracker:
         self.relocation = relocation or RelocationIndex()
         self.unmatched_streak: list[str] = []
         self._jump_candidate: tuple[int, dict] | None = None  # (ayah_id, payload)
+        # Destinations already reported this session — a jump is news once (B-9).
+        self._jumps_reported: set[int] = set()
         self._jump_segments = 0
         self._jump_provisional: Event | None = None
         # Preamble (D7): isti'adha then basmalah. Surah 1 ayah 1 IS the basmalah —
@@ -254,6 +256,7 @@ class RecitationTracker:
         self._jump_candidate = None
         self._jump_segments = 0
         self._jump_provisional = None
+        self._jumps_reported.clear()   # a new position makes old destinations news again
 
     # ------------------------------------------------------------- internals
 
@@ -470,6 +473,18 @@ class RecitationTracker:
             ev = self.confirmed_missed_ayahs.pop(ayah_id)
             events.append(Event(EventType.MISSED_AYAH, EventState.REVOKED, ev.payload, refers_to=ev.event_id))
 
+    def hold_confirmations(self) -> None:
+        """A window of audio reached us but produced no transcript.
+
+        Every pending miss was raised on the assumption that we would hear
+        everything that followed. We did not, so the evidence those verdicts are
+        waiting on may have been spoken into the blind spot. Reset their
+        countdown rather than let the next window confirm them: a false
+        "you missed this" is the worst thing this system can say (B-6).
+        """
+        for pend in self.pending.values():
+            pend.confirms_left = settings.confirm_window_k
+
     def finish(self) -> list[Event]:
         """Session ending: resolve dangling provisionals. They never met the
         evidence bar (k confirming matches), so the benefit of the doubt goes
@@ -517,14 +532,22 @@ class RecitationTracker:
                 self._jump_provisional = Event(EventType.MUTASHABEH_JUMP, EventState.PROVISIONAL, payload)
                 events.append(self._jump_provisional)
             if self._jump_segments >= settings.jump_confirm_segments and self._jump_provisional:
-                events.append(
-                    Event(
-                        EventType.MUTASHABEH_JUMP,
-                        EventState.CONFIRMED,
-                        payload,
-                        refers_to=self._jump_provisional.event_id,
+                # One divergence must produce ONE verdict. Measured before this
+                # guard: a single skipped ayah in Al-Baqarah confirmed 58 jumps,
+                # and 104 surahs with one skip each produced 238-381 events —
+                # the banner would flap and the summary would fill with jumps
+                # the reciter never made (B-9). A destination already reported
+                # is not news; only moving somewhere new is.
+                if ayah_id not in self._jumps_reported:
+                    self._jumps_reported.add(ayah_id)
+                    events.append(
+                        Event(
+                            EventType.MUTASHABEH_JUMP,
+                            EventState.CONFIRMED,
+                            payload,
+                            refers_to=self._jump_provisional.event_id,
+                        )
                     )
-                )
                 self._jump_candidate = None
                 self._jump_segments = 0
                 self._jump_provisional = None

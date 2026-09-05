@@ -3,7 +3,9 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DBSession
 
+from app.config import settings
 from app.db.models import Ayah, Surah, Word
+from app.db.session import SessionLocal
 from app.engine.aligner import RefWord
 
 
@@ -97,3 +99,36 @@ def ayah_display(db: DBSession, surah_id: int, start_ayah: int = 1) -> list[dict
             }
         )
     return out
+
+
+def purge_expired_events() -> int:
+    """Delete transcribed recitation older than the stated retention window.
+
+    The policy was documented and shipped as a cron file — which was never
+    installed, so nothing enforced it and `session_events` grew without bound
+    (docs/audit-as-built.md, S-3). A privacy claim that depends on an operator
+    remembering to copy a crontab is not a privacy guarantee, so it runs in the
+    app. Anonymous sessions only: a signed-in user's history is theirs to keep.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete, select
+
+    from app.db.models import Session as SessionRow
+    from app.db.models import SessionEvent
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=settings.anonymous_events_retention_days
+    )
+    db = SessionLocal()
+    try:
+        anon = select(SessionRow.id).where(SessionRow.user_id.is_(None))
+        result = db.execute(
+            delete(SessionEvent)
+            .where(SessionEvent.ts < cutoff)
+            .where(SessionEvent.session_id.in_(anon))
+        )
+        db.commit()
+        return result.rowcount or 0
+    finally:
+        db.close()

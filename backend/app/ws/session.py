@@ -421,6 +421,19 @@ async def session_ws(ws: WebSocket, session_id: str) -> None:
                 for seg in closed:
                     tr = await engine.transcribe(seg.audio, seg.duration)
                     if tr.gated:
+                        # The reciter spoke; we simply have no transcript for it
+                        # (too short, or the queue shed it). Dropping it silently
+                        # left a gap the NEXT window had to explain, which could
+                        # confirm a MISSED_WORD nobody made (B-6). Say so, and
+                        # hold miss-confirmation across the blind spot.
+                        if live.tracker is not None:
+                            live.tracker.hold_confirmations()
+                        log.info("asr window gated session=%s window_sec=%s reason=%s",
+                                 live.id, round(seg.duration, 2), seg.closed_reason)
+                        await ws.send_json({
+                            "type": "unheard",
+                            "seconds": round(seg.duration, 2),
+                        })
                         continue
                     tokens = tokenize(tr.text)
 

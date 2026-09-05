@@ -65,11 +65,13 @@ export function Summary({
   const attempted = s?.words_expected ?? 0
   // No recitation captured at all → not "flawless", just empty (the screenshot bug)
   const empty = !s || attempted === 0
-  // Repeats do not spoil a recitation, so they never block "flawless". Unplaced
-  // audio does: we cannot claim a flawless run over a stretch we never matched.
+  // Repeats do not spoil a recitation, so they never block "flawless".
+  // Neither does an unconfirmed word: that is OUR uncertainty, not a mistake by
+  // the reciter, and folding it into this test produced the contradiction of a
+  // clean recitation reading "0 things to review below" (B-8). It gets its own
+  // sentence instead.
   const clean =
-    s && !empty && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0 &&
-    s.uncertain === 0
+    s && !empty && s.words_missed === 0 && s.ayahs_missed === 0 && s.jumps === 0
   const issues = s ? s.words_missed + s.ayahs_missed + s.jumps : 0
   const pct = s?.accuracy_pct ?? 0
   const mins = s ? Math.floor(s.duration_sec / 60) : 0
@@ -105,9 +107,18 @@ export function Summary({
                 {surah && <span className="ar">{surah.name_arabic}</span>}
               </h2>
               {clean ? (
-                <div className="clean">
-                  Flawless recitation — <span className="ar">مَا شَاءَ ٱللَّٰه</span>
-                </div>
+                <>
+                  <div className="clean">
+                    Flawless recitation — <span className="ar">مَا شَاءَ ٱللَّٰه</span>
+                  </div>
+                  {s.uncertain > 0 && (
+                    <p className="uncertain-note">
+                      {s.uncertain === 1
+                        ? 'One word we heard but could not confirm — not counted against you.'
+                        : `${s.uncertain} words we heard but could not confirm — not counted against you.`}
+                    </p>
+                  )}
+                </>
               ) : (
                 <p>
                   {issues} thing

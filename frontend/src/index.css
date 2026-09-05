@@ -772,6 +772,8 @@ select:focus {
    uncertainty. Amber at most, never red. */
 .stat.neutral strong { color: var(--text); }
 .stat.uncertain strong { color: var(--amber); }
+/* Sits under a "flawless" verdict: informative, never a reprimand. */
+.uncertain-note { color: var(--muted); font-size: 0.92rem; margin: 6px 0 0; }
 
 .error-list {
   list-style: none;
